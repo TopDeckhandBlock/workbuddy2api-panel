@@ -1,12 +1,12 @@
-// global 模型目录探测：纯动态产出模型名及其窗口 / 能力元数据（v3-config-merge）。
+// global зондирование каталога моделей: чисто динамическая генерация имени модели и его окна / Метаданные возможностей (v3-config-merge）。
 //
-// 探测两路并发：/v3/config（主路，IDE UA 完整能力版）+ 企业端点家族
-// （/v2 → /console 补缺），并集 = v3 条目为主、企业端点补 v3 缺失的 id
-// （如 gpt-5.3-codex 只在 /v2 下发）。倍率字段（credits）虽随目录下发，但
-// 只透出展示，不注入 costTier、不参与选号。
+// Детекция в два параллельных потока:/v3/config（Основной путь,IDE UA полнофункциональная версия)+ семейство корпоративных эндпоинтов
+// （/v2 → /console дополнение недостающего), объединение = v3 записи — основа, корпоративные эндпоинты — дополнение v3 отсутствующий id
+// （Например gpt-5.3-codex Только в /v2 выдача). Поле множителя (credits）хотя поставляется вместе с каталогом, но
+// только прокинуть на отображение, без инъекции costTier、не участвует в выборе номера.
 //
-// 纯动态：不再回落任何静态名单——拉不出目录即意味着该域上游不可用，
-// 假名单只会让客户端选到 11102 的模型（产品决策：无兜底）。
+// Чистая динамика: без отката к статическим спискам — если каталог не тянется, значит апстрим домена недоступен,
+// фейковый список заставит клиента выбрать лишь 11102 модели (решение продукта: без фолбэка).
 package upstream
 
 import (
@@ -23,9 +23,9 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// GlobalModelNames 国际版（global realm）历史静态名单（PLAN §7.2 附录 21 名）。
-// 纯动态化后**不再作为模型目录的基底/兜底**：/v1/models 只透出上游实际下发的模型。
-// 保留仅作历史对照（global e2e 观测日志差集参照）。
+// GlobalModelNames Международная версия (global realm）Исторический статический список (PLAN §7.2 Приложение 21 имя).
+// после полной динамизации**больше не используется как база каталога моделей/Фолбэк**：/v1/models Пробрасывать только фактически выданные апстримом модели.
+// сохранено только для исторической сверки (global e2e эталон по diff логов наблюдений).
 var GlobalModelNames = []string{
 	"default-model",
 	"fast-model",
@@ -50,60 +50,60 @@ var GlobalModelNames = []string{
 	"kimi-k2.6",
 }
 
-// fetchGlobalModelsCache 探测结果缓存（语义参照 CN 侧 handler.dynamicModelsCache：1h TTL +
-// 5min 失败负缓存）。按 Client 实例持有（effortsMu 同模式），测试新建 Client 即隔离。
-// Mutex 内嵌，与 modelList 无并发读路径竞争（唯一读写点本文件内）。
+// fetchGlobalModelsCache Кэш результатов зондирования (семантическая ссылка CN Боковой handler.dynamicModelsCache：1h TTL +
+// 5min отрицательный кэш при ошибке). По Client хранение в экземпляре (effortsMu тот же режим), тест — создать заново Client т.е. изоляция.
+// Mutex Встроено, с modelList Нет гонки конкурентного чтения (единственная точка чтения/записи в этом файле).
 type fetchGlobalModelsCache struct {
 	sync.Mutex
-	names    []string    // 成功缓存：并集模型名（已去重）；nil = 未探测/失败
-	infos    []ModelInfo // 成功缓存：对象形态的全字段条目（窄表/失败形态为 nil）
-	fetched  time.Time
+	names []string // Кэш успеха: объединение имен моделей (дедуплицировано);nil = не прозондировано/ошибка
+	infos []ModelInfo // кэш успеха: запись-объект со всеми полями (узкая таблица/Форма сбоя — nil）
+	fetched time.Time
 	lastFail time.Time
 }
 
-// globalModelsTTL / globalModelsFailCooldown 探测缓存时长：成功 1h，失败 5min 负缓存。
+// globalModelsTTL / globalModelsFailCooldown длительность кэша пробы: успех 1h，ошибка 5min Негативный кэш.
 const (
-	globalModelsTTL          = time.Hour
+	globalModelsTTL = time.Hour
 	globalModelsFailCooldown = 5 * time.Minute
 )
 
-// globalModelsProbePaths global 企业模型目录端点候选序列（按 realm 切 base，路径"家族"）：
-// /v2 家族优先（实测 /v2/enterprises/personal/models 200 含完整模型表），
-// /console 作 fallback（同域旧路径，或 500）。v3-config-merge 后该家族降为企业补充路
-// （/v3/config 为主路，与家族并发探测；gpt-5.3-codex 等家族独有模型经此进并集）。
+// globalModelsProbePaths global Последовательность кандидатов эндпоинтов каталога enterprise-моделей (по realm Переключить base，путь"Семейство"）：
+// /v2 Приоритет семейства (фактич. /v2/enterprises/personal/models 200 содержит полную таблицу моделей),
+// /console Действие fallback（старый путь того же домена, или 500）。v3-config-merge после это семейство понижается до корпоративного резервного маршрута
+// （/v3/config как основной маршрут, с параллельным пробингом семейства;gpt-5.3-codex и т.п. уникальные модели семейства попадают в объединение через это).
 var globalModelsProbePaths = []string{
 	"/v2/enterprises/personal/models",
 	"/console/enterprises/personal/models",
 }
 
-// FetchGlobalModels 探测 global 账号的模型名目录并返回**模型名列表**（无元数据）。
+// FetchGlobalModels детект global каталог имён моделей аккаунта и вернуть**список имен моделей**（без метаданных).
 //
-// 纯动态：成功返回并集结果（去重），缓存 1h；失败（两路全非 2xx / 解析失败 /
-// 空列表）记 5min 负缓存，返回 nil（无静态回落）。缓存/负缓存命中：直接返回，零上游调用。
+// Только динамика: при успехе вернуть объединение (дедупликация), кэш 1h；сбой (оба пути не 2xx / Ошибка парсинга /
+// пустой список) запись 5min Негативный кэш, возврат nil（без статического фолбэка). Кэш/Попадание в негативный кэш: прямой возврат, ноль вызовов апстрима.
 //
-// 调用方负责：仅在有 global 账号时调用（无则不探测）；GlobalEnabled 关闭时（逃生门）
-// 不得调用——本方法由 globalOn(a) 内部兜底，若账号因开关回落 cn 则返回 nil。
+// Ответственность вызывающей стороны: только при наличии global вызывать для аккаунта (если нет — не детектить);GlobalEnabled При закрытии (аварийный выход)
+// вызывать запрещено — данный метод вызывается globalOn(a) внутренний фолбэк, если аккаунт откатился из-за переключателя cn то вернуть nil。
 func (c *Client) FetchGlobalModels(a *auth.Auth) []string {
 	names, _ := c.fetchGlobalModelsOnce(a)
 	return names
 }
 
-// FetchGlobalModelInfos 探测 global 账号的模型目录并返回全字段 ModelInfo 列表。
-// 与 FetchGlobalModels 共享同一次探测与缓存（names + infos 一体落缓存）：
-// 对象形态 200 → 全字段条目；窄表形态 / 探测失败 / 负缓存 / 非 global 路由账号
-// → nil（调用方按 ID 名单输出裸条目，不编造字段）。
-// 账号因 GlobalEnabled 开关回落 cn 时不探测（globalOn 兜底，零上游调用）。
+// FetchGlobalModelInfos детект global Каталог моделей аккаунта с возвратом всех полей ModelInfo Список.
+// и FetchGlobalModels Совместное использование одного зондирования и кэша (names + infos единая запись в кэш):
+// Форма объекта 200 → Запись со всеми полями; узкотабличная форма / ошибка пробы / Негативный кэш / не global Маршрутизирующий аккаунт
+// → nil（Вызывающая сторона по ID Вывод списка — голые записи, без генерации полей).
+// Аккаунт из-за GlobalEnabled откат свитча cn при этом не пробовать (globalOn фолбэк, ноль вызовов апстрима).
 func (c *Client) FetchGlobalModelInfos(a *auth.Auth) []ModelInfo {
 	_, infos := c.fetchGlobalModelsOnce(a)
 	return infos
 }
 
-// fetchGlobalModelsOnce 单次探测决策（缓存命中/负缓存/触发探测），返回 (names, infos)。
-// 纯动态：成功 = 并集结果去重；一切失败 = nil（不回落静态）。
-// infos 仅对象形态成功探测时非 nil。
+// fetchGlobalModelsOnce решение одной проверки (попадание в кэш/Негативный кэш/запуск пробы), возврат (names, infos)。
+// чисто динамически: успех = Дедупликация объединения; полный провал = nil（без fallback на статику).
+// infos Только при успешном детекте объектной формы не nil。
 func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []ModelInfo) {
 	if !c.globalOn(a) {
-		// 逃生门兜底：账号不路由 global 上游 → 不探测（零上游调用）。
+		// Аварийный фолбэк: аккаунт не маршрутизируется global апстрим → Без зондирования (ноль вызовов апстрима).
 		return nil, nil
 	}
 
@@ -114,7 +114,7 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 		return names, infos
 	}
 	if !c.globalModels.lastFail.IsZero() && time.Since(c.globalModels.lastFail) < globalModelsFailCooldown {
-		// 负缓存冷却期内：避免反复打上游，直接按失败处理（无静态回落）。
+		// В период охлаждения negative cache: не бить повторно в апстрим, сразу считать ошибкой (без статического fallback).
 		c.globalModels.Unlock()
 		return nil, nil
 	}
@@ -122,7 +122,7 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 
 	names, infos, efforts, defaults, err := c.probeGlobalModels(a)
 	if err != nil || len(names) == 0 {
-		// 探测失败：负缓存 + 返回 nil（effort 桶不写，prepareBody 走 globalEffortMap 静态兜底）。
+		// Ошибка пробы: негативный кэш + вернуть nil（effort Бакет без записи,prepareBody Ход globalEffortMap статический fallback).
 		c.globalModels.Lock()
 		c.globalModels.lastFail = time.Now()
 		c.globalModels.names = nil
@@ -130,16 +130,16 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 		c.globalModels.Unlock()
 		return nil, nil
 	}
-	// global 域 effort 能力：探测下发的 supportedEfforts/defaultEffort 权威写入 global 桶
-	// （raw remote，不并入静态表——静态兜底在 prepareBody 的 globalEffortMap 与
-	// /v1/models 的 EffortListing 里按需 fallback）。空探测不写（防清既有桶）。
+	// global Домен effort возможность: зондируемый выданный supportedEfforts/defaultEffort Авторитетная запись global Бакет
+	// （raw remote，не включать в статическую таблицу — статический фолбэк в prepareBody globalEffortMap и
+	// /v1/models EffortListing по требованию внутри fallback）。пустая проба не пишется (защита от очистки существующих бакетов).
 	if len(efforts) > 0 || len(defaults) > 0 {
 		c.storeEfforts("global", efforts, defaults)
 	}
 	c.storeModelRates("global", infos)
 
-	// 成功：探测结果去重。names/infos 均落缓存；倍率等选号敏感字段只透出展示，
-	// 不注入 costTier。
+	// успех: дедупликация результатов проб.names/infos все уходит в кэш; чувствительные к выбору поля вроде множителя — только для отображения,
+	// Не инжектировать costTier。
 	seen := make(map[string]bool, len(names))
 	merged := make([]string, 0, len(names))
 	for _, id := range names {
@@ -159,26 +159,26 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 	return merged, infos
 }
 
-// probeGlobalModels 发起一次 global 模型目录探测（v3-config-merge）：
-// /v3/config（主，IDE UA 完整能力版）与企业端点家族（/v2 → /console 兜底，补缺）
-// **并发**探测后并集合并。返回模型名列表（已合并、未再去重——去重在
-// fetchGlobalModelsOnce）、全字段 ModelInfo（对象形态；窄表为 nil）及 effort
-// 能力桶（supportedEfforts/defaultEffort，可为空）。合并口径：v3 条目为主
-// （credits 等字段以 v3 为准），企业端点只补 v3 缺失的模型 id；去重 key =
-// 模型 id，输出顺序稳定。两路全失败才返回错误（等价原「家族端点全非 2xx」
-// 负缓存语义）；单路失败降级为另一路结果 + warn 日志，互不拖累。
+// probeGlobalModels инициировать один раз global Проба каталога моделей (v3-config-merge）：
+// /v3/config（основной,IDE UA полная версия) и семейство enterprise-эндпоинтов (/v2 → /console фолбэк, восполнение пробелов)
+// **Конкурентность**Объединение после детекта. Возвращает список имён моделей (объединено, без дедупликации — дедупликация в
+// fetchGlobalModelsOnce）、все поля ModelInfo（форма объекта; узкая таблица — nil）И effort
+// Бакет возможностей (supportedEfforts/defaultEffort，может быть пустым). Объединенная метрика:v3 Приоритет — записи
+// （credits и др. поля как v3 за основу), enterprise-эндпоинт только дополняет v3 отсутствующая модель id；дедупликация key =
+// Модель id，Порядок вывода стабилен. Ошибка только если оба пути отказали (эквивалент исходному "все эндпоинты семейства недоступны 2xx」
+// семантика негативного кэша); при отказе одного канала — фолбэк на результат другого + warn логи, без взаимного влияния.
 func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelInfo, efforts map[string][]string, defaults map[string]string, err error) {
 	type probeResult struct {
 		names []string
 		infos []ModelInfo
-		err   error
+		err error
 	}
-	// probeV3 单次 /v3/config 探测（UA 参数化）。该端点对不同 UA 下发**不同模型集合**：
-	// IDE UA 与 CLI UA 各有独有模型（见 codeBuddyCLIUA 注释），故并发两路取并集。
+	// probeV3 Однократно /v3/config Проба (UA параметризовано). Данный эндпоинт для разных UA выдача**Разные наборы моделей**：
+	// IDE UA и CLI UA у каждого свои уникальные модели (см. codeBuddyCLIUA комментарий), поэтому два конкурентных пути — объединение.
 	probeV3 := func(ua string) chan probeResult {
 		ch := make(chan probeResult, 1)
 		go func() {
-			// chatBase 已按 realm 切 global base。
+			// chatBase Уже по realm Переключить global base。
 			byID, perr := c.fetchV3ConfigModelMap(a, ua)
 			if perr != nil {
 				ch <- probeResult{err: perr}
@@ -193,7 +193,7 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 				ids = append(ids, mi.ID)
 				outInfos = append(outInfos, mi)
 			}
-			sort.Strings(ids) // map 迭代序随机，排序保输出稳定
+			sort.Strings(ids) // map Порядок итерации случаен, сортировка обеспечивает стабильность вывода
 			ch <- probeResult{names: ids, infos: outInfos}
 		}()
 		return ch
@@ -202,7 +202,7 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	v3CLICh := probeV3(codeBuddyCLIUA)
 	enterpriseCh := make(chan probeResult, 1)
 	go func() {
-		// 企业端点家族：/v2 首选 → /console 兜底（既有探活序，零回归）。
+		// Семейство корпоративных эндпоинтов:/v2 Приоритетный → /console Fallback (существующий порядок probe, без регрессии).
 		var lastErr error
 		for _, path := range globalModelsProbePaths {
 			names, infos, perr := c.globalModelsOnce(a, path)
@@ -218,8 +218,8 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	v3IDE := <-v3IDECh
 	v3CLI := <-v3CLICh
 	enterprise := <-enterpriseCh
-	// v3 两路自合并：IDE 路字段权威（响应更大、单条字段更全），CLI 路只补缺失的模型 id。
-	// 单路成功即用该路；两路全失败才带 err 进入下游降级判断。
+	// v3 Самослияние двух путей:IDE поле маршрута авторитетно (ответ больше, поля одиночной записи полнее),CLI маршрут дополняет только отсутствующие модели id。
+	// Один канал успешен — используется он; только при отказе обоих — с err Переход к проверке деградации downstream.
 	var v3 probeResult
 	switch {
 	case v3IDE.err != nil && v3CLI.err != nil:
@@ -236,11 +236,11 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	}
 
 	if v3.err != nil && enterprise.err != nil {
-		// 两路全失败 → 负缓存语义（等价原家族端点全非 2xx）。
+		// оба канала неуспешны → Семантика негативного кэша (эквивалент — все эндпоинты исходного семейства недоступны 2xx）。
 		return nil, nil, nil, nil, v3.err
 	}
 	if v3.err != nil {
-		// /v3 失败降级：不拖累企业端点结果（降级仅企业端点 + warn）。
+		// /v3 деградация при ошибке: не тянет за собой результат enterprise-эндпоинта (деградация только enterprise-эндпоинт + warn）。
 		log.Printf("WARN: [upstream] global models: v3/config probe failed (degraded to enterprise endpoint): %v", v3.err)
 		names, infos, efforts, defaults = extractEfforts(enterprise.infos)
 		return names, infos, efforts, defaults, nil
@@ -250,7 +250,7 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 		names, infos, efforts, defaults = extractEfforts(v3.infos)
 		return names, infos, efforts, defaults, nil
 	}
-	// 两路皆成功：v3 为主、企业端点补缺合并（含 effort 桶合并，v3 权威）。
+	// Оба пути успешны:v3 основа, слияние с дополнением enterprise-эндпоинта (вкл. effort объединение бакетов,v3 авторитет).
 	v3Names, v3Infos, v3Efforts, v3Defaults := extractEfforts(v3.infos)
 	if len(v3Names) == 0 {
 		v3Names = v3.names
@@ -265,8 +265,8 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 	return names, infos, efforts, defaults, nil
 }
 
-// extractEfforts 从条目列表抽取 effort 能力桶（supportedEfforts 数组优先；
-// 缺数组但 defaultEffort 单档非空也入 defaults 桶）并顺带返回有序 names。
+// extractEfforts извлечь из списка записей effort Бакет возможностей (supportedEfforts Приоритет массива;
+// Нет массива, но defaultEffort Одиночный непустой профиль тоже учитывается defaults бакет) и попутно вернуть отсортированный names。
 func extractEfforts(infos []ModelInfo) (names []string, out []ModelInfo, efforts map[string][]string, defaults map[string]string) {
 	names = make([]string, 0, len(infos))
 	for _, mi := range infos {
@@ -291,10 +291,10 @@ func extractEfforts(infos []ModelInfo) (names []string, out []ModelInfo, efforts
 	return names, out, efforts, defaults
 }
 
-// mergeGlobalCatalog 两路合并（v3 主、企业补缺）：names 按 id 去重（v3 原序在前、
-// 企业端点补充项在其原序后追加——稳定输出）；infos 同步合并（v3 条目字段权威，
-// 企业端点条目只在 id 缺失时进并集）。
-// 窄表形态（infos nil）时保持 nil——无对象字段不编造。
+// mergeGlobalCatalog слияние двух каналов (v3 Основной, корпоративное восполнение):names Нажать id Дедупликация (v3 Исходный порядок впереди,
+// доп. enterprise-эндпоинты добавляются после исходного порядка — стабильный вывод);infos Синхронное слияние (v3 Поле записи — авторитетно,
+// Записи enterprise-эндпоинта только в id при отсутствии — в объединение).
+// узкотабличная форма (infos nil）при этом сохранять nil——Не выдумывать отсутствующие поля объекта.
 func mergeGlobalCatalog(primaryNames []string, primaryInfos []ModelInfo, secondaryNames []string, secondaryInfos []ModelInfo) (names []string, infos []ModelInfo) {
 	if len(secondaryNames) == 0 {
 		return primaryNames, primaryInfos
@@ -319,8 +319,8 @@ func mergeGlobalCatalog(primaryNames []string, primaryInfos []ModelInfo, seconda
 		}
 		seen[id] = true
 		out = append(out, id)
-		// 窄表企业响应（secondaryInfos nil / 超出条目数）时该 id 无对象字段，
-		// infos 保持原样（调用方按 id 名单输出裸条目，不编造字段）。
+		// ответ enterprise в узкой таблице (secondaryInfos nil / при превышении числа записей) данный id нет поля объекта,
+		// infos оставить как есть (вызывающая сторона по id Вывод списка — голые записи, без генерации полей).
 		for _, mi := range secondaryInfos {
 			if mi.ID == id {
 				outInfos = append(outInfos, mi)
@@ -331,7 +331,7 @@ func mergeGlobalCatalog(primaryNames []string, primaryInfos []ModelInfo, seconda
 	return out, outInfos
 }
 
-// mergeEffortBuckets 合并两路 effort 桶：主路（v3）权威，企业端点只补主路缺失的模型档位。
+// mergeEffortBuckets Объединение двух потоков effort бакет: основной путь (v3）Авторитетно, корпоративный эндпоинт дополняет только отсутствующие тарифы модели основного маршрута.
 func mergeEffortBuckets(primary, secondary map[string][]string) map[string][]string {
 	if len(secondary) == 0 {
 		return primary
@@ -348,7 +348,7 @@ func mergeEffortBuckets(primary, secondary map[string][]string) map[string][]str
 	return out
 }
 
-// mergeEffortDefaults 合并两路 defaultEffort：主路（v3）权威，企业端点只补缺失。
+// mergeEffortDefaults Объединение двух потоков defaultEffort：основной путь (v3）авторитетен, enterprise-эндпоинт только дополняет недостающее.
 func mergeEffortDefaults(primary, secondary map[string]string) map[string]string {
 	if len(secondary) == 0 {
 		return primary
@@ -365,15 +365,15 @@ func mergeEffortDefaults(primary, secondary map[string]string) map[string]string
 	return out
 }
 
-// globalModelsOnce 单端点探测。2xx + 解析出非空名单 → (names, infos, nil)；否则 (nil, nil, err)。
+// globalModelsOnce Зондирование одной конечной точки.2xx + Распарсить непустой список → (names, infos, nil)；Иначе (nil, nil, err)。
 func (c *Client) globalModelsOnce(a *auth.Auth, path string) ([]string, []ModelInfo, error) {
-	url := c.chatBase(a) + path // 按 realm 切 base：global 账号 → global base
+	url := c.chatBase(a) + path // Нажать realm Переключить base：global Аккаунт → global base
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	c.CommonHeaders(req, a) // 共享请求头（Origin/Referer/UA），与 FetchModels 同款
-	// AccessToken 加锁快照（见 auth.AccessTokenValue：keepalive 刷新在 a.mu 内改写）。
+	c.CommonHeaders(req, a) // Общие заголовки запроса (Origin/Referer/UA），и FetchModels Та же модель
+	// AccessToken Снапшот под блокировкой (см. auth.AccessTokenValue：keepalive обновление в a.mu перезапись внутри).
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -382,7 +382,7 @@ func (c *Client) globalModelsOnce(a *auth.Auth, path string) ([]string, []ModelI
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		// 读失败 → 传输层错误：半截 body 不进解析（探测负缓存走 lastFail，不罚号）。
+		// Ошибка чтения → Ошибка транспортного уровня: оборванный body Не входит в парсинг (зондирование через негативный кэш lastFail，без штрафа для аккаунта).
 		return nil, nil, fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -392,28 +392,28 @@ func (c *Client) globalModelsOnce(a *auth.Auth, path string) ([]string, []ModelI
 	return names, infos, err
 }
 
-// parseGlobalModelNames 多信封兼容解析模型目录（国际站曾在多种 envelope 间切换，
-// 只认单一形态会把登录成功的账号误判为"无模型"）：
-//   - 信封：code 存在且非 0 才拒（无 code 字段也放行）；payload = data（非空非
-//     null 时）否则整包；
-//   - 模型数组定位：payload 本身是数组，或是 map 下 models/items/list/data/result
-//     任一键（递归一层层往下找第一个非空数组）——覆盖 data.models / data.items /
-//     data.list / 顶层 models 等变体；
-//   - 数组主形态：对象数组按 dynModelEntry 全字段解析（与 CN 目录同构，字段零
-//     漂移）：maxInputTokens/maxOutputTokens/maxAllowedSize/supportsReasoning/
-//     supportsImages/reasoning.*；id 缺省时回退 name；disabled 剔除；
-//   - 窄表：字符串数组 → 仅 ID，元数据留空（窗口由调用方四级查找链兜底）；
-//   - 动态兜底：主形态解析不出任何可用条目时（上游换了键名），逐对象宽松解析——
-//     id 依次回退 id/modelId/model/name，窗口键回退 contextWindow/maxTokens，
-//     reasoning 档位（defaultEffort 新键优先、effort 老键兜底）保留。
+// parseGlobalModelNames Совместимый парсинг каталога моделей с несколькими конвертами (международная площадка ранее в нескольких envelope Переключение между,
+// Распознавание только одной формы ошибочно примет успешно вошедший аккаунт за"Без модели"）：
+// - конверт:code существует и не 0 только тогда отклонять (нет code поле тоже пропускается);payload = data（непустой не
+// null иначе — целый пакет;
+// - Позиция в массиве моделей:payload сам является массивом, или map вниз models/items/list/data/result
+// Любой ключ (рекурсивно искать первый непустой массив вниз по уровням) — перекрытие data.models / data.items /
+// data.list / Верхний уровень models и др. варианты;
+// - основная форма массива: массив объектов по dynModelEntry Парсинг всех полей (с CN Каталоги изоморфны, поле нулевое
+// дрейф):maxInputTokens/maxOutputTokens/maxAllowedSize/supportsReasoning/
+// supportsImages/reasoning.*；id фолбэк при отсутствии значения name；disabled исключить;
+// - Узкая таблица: массив строк → Только ID，Метаданные оставить пустыми (окно покрывается 4-уровневой цепочкой поиска вызывающей стороны);
+// - Динамический fallback: если основной парсинг не дал ни одной доступной записи (апстрим сменил ключи), поштучный lenient-парсинг объектов —
+// id Последовательный откат id/modelId/model/name，фолбэк ключа окна contextWindow/maxTokens，
+// reasoning уровень (defaultEffort Приоритет нового ключа,effort fallback старого ключа) сохраняется.
 //
-// 同时产出 effort 能力桶（supportedEfforts/defaultEffort）。
-// 解析成功但名单为空 → 返回错误（等价"该端点没给全"）。
+// одновременно выдать effort Бакет возможностей (supportedEfforts/defaultEffort）。
+// парсинг успешен, но список пуст → вернуть ошибку (эквивалент"эндпоинт вернул неполные данные"）。
 func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, efforts map[string][]string, defaults map[string]string, err error) {
 	fail := func(e error) ([]string, []ModelInfo, map[string][]string, map[string]string, error) {
 		return nil, nil, nil, nil, e
 	}
-	// 信封层：code 拒绝非 0 业务码（字段缺失 = 放行，兼容无信封直出的目录端点）。
+	// Уровень конверта:code Отклонить не- 0 бизнес-код (отсутствие поля = пропустить, совместимо с endpoint'ом каталога без конверта).
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fail(fmt.Errorf("global models parse: %w", err))
@@ -435,13 +435,13 @@ func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, effor
 		return fail(fmt.Errorf("global models empty list"))
 	}
 
-	// 主形态：对象数组 → dynModelEntry 全字段（与 CN FetchModels 共用解析，零口径漂移）。
+	// основная форма: массив объектов → dynModelEntry Все поля (с CN FetchModels Общий парсинг, нулевое расхождение метрик).
 	var entries []dynModelEntry
 	if json.Unmarshal(arr, &entries) == nil {
 		out := make([]string, 0, len(entries))
 		objInfos := make([]ModelInfo, 0, len(entries))
 		for _, m := range entries {
-			// id 回退链 id→modelId→model→name（宽松键仅出现在 global 目录变体里）。
+			// id Цепочка фолбэка id→modelId→model→name（Нестрогий ключ встречается только в global в вариантах каталога).
 			id := m.ID
 			if id == "" {
 				id = m.ModelID
@@ -457,7 +457,7 @@ func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, effor
 			}
 			out = append(out, id)
 			mi := m.modelInfo()
-			mi.ID = id // name 兜底形态下 id 取自 name，对齐 names 输出
+			mi.ID = id // name в fallback-форме id взято из name，Выравнивание names Вывод
 			objInfos = append(objInfos, mi)
 			if len(m.Reasoning.SupportedEfforts) > 0 {
 				if efforts == nil {
@@ -475,11 +475,11 @@ func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, effor
 		if len(out) > 0 {
 			return out, objInfos, efforts, defaults, nil
 		}
-		// 可用条目为 0（键名全对不上）：落入下方动态兜底，不在这里报空。
+		// Доступные записи: 0（ни одно имя ключа не совпало): срабатывает динамический fallback ниже, здесь пусто не возвращается.
 		efforts, defaults = nil, nil
 	}
 
-	// 窄表：字符串数组 → 仅 ID（无 effort 元数据、无对象字段 → infos nil）。
+	// Узкая таблица: массив строк → Только ID（отсутствует effort Метаданные, без объектных полей → infos nil）。
 	var strs []string
 	if json.Unmarshal(arr, &strs) == nil {
 		out := make([]string, 0, len(strs))
@@ -494,7 +494,7 @@ func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, effor
 		return fail(fmt.Errorf("global models empty list"))
 	}
 
-	// 动态兜底：逐对象宽松解析（上游换键名时不至于整域空列表）。
+	// динамический фолбэк: мягкий парсинг по объектам (при смене имени ключа апстримом не приводит к пустому списку всего домена).
 	var items []any
 	if json.Unmarshal(arr, &items) != nil {
 		return fail(fmt.Errorf("global models parse: unsupported payload shape"))
@@ -503,7 +503,7 @@ func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, effor
 	infos = make([]ModelInfo, 0, len(items))
 	for _, item := range items {
 		switch v := item.(type) {
-		case string: // 混合数组里的裸 ID：按窄表条目处理
+		case string: // голые значения в смешанном массиве ID：обрабатывать как запись узкой таблицы
 			if id := strings.TrimSpace(v); id != "" {
 				out = append(out, id)
 				infos = append(infos, ModelInfo{ID: id})
@@ -535,9 +535,9 @@ func parseGlobalModelNames(raw []byte) (names []string, infos []ModelInfo, effor
 	return out, infos, efforts, defaults, nil
 }
 
-// resolveGlobalModelsArray 从 payload 定位模型数组：payload 本身是数组直接用；
-// 是 map 则依次尝试 models/items/list/data/result 键（递归下钻，取第一个能解析出
-// 数组的分支）。找不到数组 → false。
+// resolveGlobalModelsArray Из payload локализовать массив моделей:payload сам массив — использовать напрямую;
+// Да map то последовательно пробовать models/items/list/data/result ключ (рекурсивный спуск, берется первый успешно парсируемый
+// ветка массива). Массив не найден → false。
 func resolveGlobalModelsArray(payload json.RawMessage) (json.RawMessage, bool) {
 	trimmed := strings.TrimSpace(string(payload))
 	if strings.HasPrefix(trimmed, "[") {
@@ -557,10 +557,10 @@ func resolveGlobalModelsArray(payload json.RawMessage) (json.RawMessage, bool) {
 	return nil, false
 }
 
-// parseGlobalModelLoose 单模型对象的宽松解析（多信封兜底路径）：id 依次回退
-// id/modelId/model/name；窗口/上限键回退 contextWindow/maxTokens；reasoning 档位
-// defaultEffort 新键优先、effort 老键兜底。disabled 剔除。Credits 恒不解析
-// （PLAN §3.D2：倍率不进 global 路径）。
+// parseGlobalModelLoose нестрогий парсинг объекта одной модели (fallback-путь с несколькими envelope):id Последовательный откат
+// id/modelId/model/name；Окно/Откат ключа лимита contextWindow/maxTokens；reasoning Грейд
+// defaultEffort Приоритет нового ключа,effort Фолбэк на старый ключ.disabled Исключить.Credits Никогда не парсить
+// （PLAN §3.D2：Множитель не учитывается global путь).
 func parseGlobalModelLoose(obj map[string]any) (ModelInfo, bool) {
 	str := func(key string) string {
 		s, _ := obj[key].(string)
@@ -588,10 +588,10 @@ func parseGlobalModelLoose(obj map[string]any) (ModelInfo, bool) {
 		return 0
 	}
 	mi := ModelInfo{
-		ID:             id,
-		Name:           str("name"),
-		ContextWindow:  num("maxInputTokens", "contextWindow"),
-		MaxTokens:      num("maxOutputTokens", "maxTokens"),
+		ID: id,
+		Name: str("name"),
+		ContextWindow: num("maxInputTokens", "contextWindow"),
+		MaxTokens: num("maxOutputTokens", "maxTokens"),
 		MaxAllowedSize: num("maxAllowedSize"),
 	}
 	mi.SupportsReasoning, _ = obj["supportsReasoning"].(bool)
@@ -603,7 +603,7 @@ func parseGlobalModelLoose(obj map[string]any) (ModelInfo, bool) {
 		}
 		mi.DefaultEffort = reasonStr("defaultEffort")
 		if mi.DefaultEffort == "" {
-			mi.DefaultEffort = reasonStr("effort") // 老模型键兜底，与 CN 侧同款
+			mi.DefaultEffort = reasonStr("effort") // фолбэк на ключ старой модели, и CN аналог на стороне
 		}
 		mi.CanDisableThinking, _ = r["canDisableThinking"].(bool)
 		if arr, ok := r["supportedEfforts"].([]any); ok {

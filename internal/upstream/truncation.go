@@ -1,12 +1,12 @@
-// truncation.go 工具调用的残缺参数检测（吸收参考仓库 sse.ts:158-167
-// isTruncatedArguments 语义）。
+// truncation.go Детекция неполных параметров вызова инструмента (заимствовано из реф. репозитория sse.ts:158-167
+// isTruncatedArguments семантика).
 //
-// 背景：SSE 流被截断（连接中断 / finish_reason==length）时，工具调用的 arguments
-// 会只剩半截 JSON。此时网关若把脏参数原样交给客户端，客户端解析会报非法 JSON 并卡死会话。
-// 参考仓库的处置是丢弃残缺调用并触发重试（报告 max-tokens），而非补成 {} 伪造合法外观。
+// контекст:SSE Поток прерван (обрыв соединения / finish_reason==length）при этом вызов инструмента arguments
+// останется лишь половина JSON。в этот момент если шлюз передаст грязные параметры клиенту как есть, парсинг клиента выдаст ошибку невалидности JSON и зависание сессии.
+// обработка в референс-репозитории — отбросить неполный вызов и запустить ретрай (репорт max-tokens），а не дополнять до {} Подделка легитимного вида.
 //
-// 关键区分：只把「非空但无法解析」视为截断。空串是合法的无参数工具；能解析但类型不对
-// （标量 / 数组）属于模型输出错误，交给客户端 schema 校验回传即可，不在此判定。
+// ключевое различие: только "непустое но непарсируемое" считается усечением. пустая строка — валидный безаргументный tool; парсится но неверный тип
+// （скаляр / массив) — ошибка вывода модели, отдать клиенту schema Достаточно проверки ответа, здесь не оценивается.
 package upstream
 
 import (
@@ -14,10 +14,10 @@ import (
 	"strings"
 )
 
-// isTruncatedArguments 判定工具参数字符串是否因分片丢失而残缺（区别于「该工具本就无参数」）。
-//   - 空串 / 纯空白 → false（合法无参工具）；
-//   - 非空但 JSON 解析失败 → true（截断）；
-//   - 能解析（含 null/标量/数组等任何合法 JSON）→ false。
+// isTruncatedArguments Определить, усечена ли строка параметров инструмента из-за потери фрагмента (отличать от "у инструмента изначально нет параметров»).
+// - Пустая строка / Только пробелы → false（валидный безаргументный инструмент);
+// - Непусто, но JSON Ошибка парсинга → true（усечение);
+// - Поддаётся парсингу (вкл. null/скаляр/массив и любой валидный JSON）→ false。
 func isTruncatedArguments(raw string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -27,8 +27,8 @@ func isTruncatedArguments(raw string) bool {
 	return json.Unmarshal([]byte(trimmed), &v) != nil
 }
 
-// dropTruncatedToolCalls 过滤出 arguments 完整的 tool_call（返回新 slice）。
-// 只依据 isTruncatedArguments 判定，不改动任何保留的调用（正例零改动）。
+// dropTruncatedToolCalls отфильтровать arguments Полный tool_call（Вернуть новое slice）。
+// только на основании isTruncatedArguments проверка, без изменения сохранённых вызовов (ноль изменений для позитивных кейсов).
 func dropTruncatedToolCalls(calls []map[string]any) []map[string]any {
 	kept := make([]map[string]any, 0, len(calls))
 	for _, call := range calls {

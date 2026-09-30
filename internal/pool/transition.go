@@ -1,53 +1,53 @@
-// 账号状态机迁移的唯一权威实现。
+// Единственная авторитетная реализация переходов автомата состояний аккаунта.
 //
-// entry 的「可选择性」由四个正交维度决定：禁用(disabled)、账号级冷却(until/coolKind)、
-// 模型级冷却(modelCooldowns)、熔断(breakerUntil)。维度之间以「迁移原语」收拢，
-// 禁止在其他文件散写这些字段——所有入口（applyErrorPolicy / refresh / keepalive /
-// 签到 / 选号）对状态的改动都必须经本文件的原语或经 Cooldown/NoteError/NoteSuccess 等
-// 封装（它们在持锁下调用本文件原语）。
+// entry "опциональность» определяется четырьмя ортогональными измерениями: disabled(disabled)、Кулдаун на уровне аккаунта(until/coolKind)、
+// Кулдаун на уровне модели(modelCooldowns)、Circuit Breaker(breakerUntil)。Между измерениями сводится "примитивом миграции»,
+// Запрещено разбрасывать эти поля по другим файлам — все точки входа (applyErrorPolicy / refresh / keepalive /
+// check-in / выбора номера) изменения состояния должны идти через примитивы этого файла или через Cooldown/NoteError/NoteSuccess и т.д.
+// Инкапсуляция (они вызывают примитивы этого файла под блокировкой).
 //
-// 迁移矩阵（事件 → 动作 → 字段）：
+// Матрица миграции (событие → Действие → поле):
 //
-//	disabled           ← disableLocked（Disable / NoteSessionDead 达阈）
-//	until/coolKind     ← Cooldown(CoolSoft/Hard) / CooldownSoftForModel 无解析分支
-//	modelCooldowns     ← CooldownSoftForModel 有解析分支；被 disableLocked/Cooldown/clearCoolingLocked 清
-//	                     （reviveCoolingLocked 不清——余额恢复不构成限流解除证据）
-//	breakerUntil       ← recordBreakerFailureLocked（Cooldown/NoteError 喂入）；NoteSuccess 清
-//	softStreak         ← Cooldown(CoolSoft)/CooldownSoftForModel；NoteSuccess 清（revive 保留：与余额无关）
-//	sessionDeadFails   ← NoteSessionDead；ClearSessionDead/NoteSuccess/ReviveDisabled 清
+//	disabled ← disableLocked（Disable / NoteSessionDead достижение порога)
+//	until/coolKind ← Cooldown(CoolSoft/Hard) / CooldownSoftForModel Ветка без парсинга
+//	modelCooldowns ← CooldownSoftForModel Есть ветка парсинга; disableLocked/Cooldown/clearCoolingLocked Очистить
+//	 （reviveCoolingLocked не сброшен — восстановление баланса не является доказательством снятия лимита)
+//	breakerUntil ← recordBreakerFailureLocked（Cooldown/NoteError подача);NoteSuccess Очистить
+//	softStreak ← Cooldown(CoolSoft)/CooldownSoftForModel；NoteSuccess Очистка (revive сохранение: не зависит от баланса)
+//	sessionDeadFails ← NoteSessionDead；ClearSessionDead/NoteSuccess/ReviveDisabled Очистить
 //
-// 关键正交性（疑点 4 修正）：
-//   - 冷却域（until/coolKind/softStreak/modelCooldowns）与熔断器（fails/retryCount/
-//     breakerUntil）正交：冷却管「近期被限流/余额耗尽」，熔断管「反复 5xx 失败」。
-//     disableLocked 只清冷却域、不动熔断——禁用是授权/session 终态，不应覆盖熔断观测。
-//   - clearCoolingLocked 是「冷却域归零」的单一来源，被 disableLocked 共用
-//     （禁用是终态，冷却随之作废）。reviveCoolingLocked（签到/余额刷新解冻）**不再**
-//     走全清：余额恢复只解冻 CoolHard，软限流与模型级台账各有自身恢复时刻
-//     （详见 reviveCoolingLocked 注释）。
+// Ключевая ортогональность (сомнение 4 исправление):
+// - Домен охлаждения (until/coolKind/softStreak/modelCooldowns）и circuit breaker (fails/retryCount/
+// breakerUntil）Ортогонально: кулдаун — "недавно под ограничением»/баланс исчерпан», предохранитель для "повторных 5xx сбой».
+// disableLocked очищается только домен кулдауна, без сброса circuit breaker — блокировка это авторизация/session Терминальное состояние, не должно перекрывать наблюдения circuit breaker.
+// - clearCoolingLocked Является единственным источником "сброса cooldown-домена», disableLocked общий
+// （отключение — терминальное состояние, кулдаун при этом аннулируется).reviveCoolingLocked（check-in/разморозка при обновлении баланса)**Больше не**
+// Полная очистка: восстановление баланса — только разморозкой CoolHard，мягкий лимит и учет на уровне модели имеют свое время восстановления
+// （см. подробнее reviveCoolingLocked комментарий).
 package pool
 
 import "time"
 
-// clearCoolingLocked 清冷却域：until/coolKind/softStreak/modelCooldowns 全归零，
-// reason 一并清空。熔断器（fails/retryCount/breakerUntil）不属冷却域，不动。
-// 调用方必须已持有 p.mu。
+// clearCoolingLocked очистка домена охлаждения:until/coolKind/softStreak/modelCooldowns полный сброс в ноль,
+// reason Очистить вместе. Предохранитель (fails/retryCount/breakerUntil）не входит в домен cooldown — не трогать.
+// вызывающая сторона должна уже удерживать p.mu。
 func (e *entry) clearCoolingLocked() {
 	e.until = time.Time{}
 	e.coolKind = 0
 	e.reason = ""
 	e.softStreak = 0
-	e.modelCooldowns = nil // 冷却域清零时一并清模型级独立冷却（模型豁免随之消失）
+	e.modelCooldowns = nil // при сбросе домена охлаждения также сбрасывается независимый кулдаун уровня модели (освобождение модели исчезает)
 }
 
-// disableLocked 禁用迁移：置 disabled 并清冷却域（禁用是比冷却更强的不可用终态）。
+// disableLocked отключить миграцию: установить disabled и очистить домен кулдауна (блокировка — более сильный терминальный статус недоступности, чем кулдаун).
 //
-// 旧 Disable 只置 disabled+reason，不碰 until/modelCooldowns/softStreak，会出现
-// 「disabled=true 但 cooling=true / 残留 modelCooldowns」的一致性问题——一个先被
-// 硬冷却（到次日 04:00）再被禁用的账号会同时呈现两种状态。禁用后冷却无意义
-// （账号已退出选号，冷却截止不再被读取），故一并清空。
+// старый Disable установить только disabled+reason，Не трогать until/modelCooldowns/softStreak，появится
+// 「disabled=true Но cooling=true / Остаток modelCooldowns」проблема консистентности — один сначала
+// Жесткое охлаждение (до следующего дня 04:00）Повторно заблокированный аккаунт покажет два статуса одновременно. После блокировки кулдаун не имеет смысла
+// （аккаунт вышел из выбора номера, дедлайн охлаждения больше не читается), поэтому очищается вместе.
 //
-// 熔断器保留：熔断是「连续 5xx 失败」信号（与授权/会话无关），禁用后再复活时
-// 熔断观测仍有效，不应被禁用覆盖。
+// Сохранение circuit breaker: срабатывание — "последовательное 5xx сбой» (с авторизацией/вне сессии), после отключения и последующего восстановления
+// Наблюдение circuit breaker остаётся активным, не должно перекрываться отключением.
 func (p *Pool) disableLocked(e *entry, reason string) {
 	e.clearCoolingLocked()
 	e.disabled = true
@@ -55,18 +55,18 @@ func (p *Pool) disableLocked(e *entry, reason string) {
 	p.dirty.Store(true)
 }
 
-// reviveCoolingLocked 余额恢复解冻：只清**余额耗尽冷却**（CoolHard 的
-// until/coolKind/reason）并更新 credits/creditsTotal。
+// reviveCoolingLocked Разморозка при восстановлении баланса: очищать только**Кулдаун при исчерпании баланса**（CoolHard 
+// until/coolKind/reason）И обновить credits/creditsTotal。
 //
-// 不动 CoolSoft 软限流退避、softStreak 与 modelCooldowns（6004 模型级台账）：
-// 后两者的恢复证据是上游重置墙钟到期或探测成功，不是「余额有钱」。余额刷新
-// 周期任务（每 5 分钟）经 ReenableIfCredits 到达这里——若在此清空整个冷却域，
-// 任何限流冷却的实际寿命都被压到一个刷新周期内：6004 台账被抹后撞限号被误判
-// 健康、重新选中再撞 429，全池冷却保护形同虚设（两号池实测复现）。softStreak
-// 亦保留：退避计数与余额无关，由 NoteSuccess（成功是最强恢复证据）或自然到期
-// 收敛。硬冷却（CoolHard）的权威恢复证据正是余额恢复（remain>0），照旧解冻。
-// 不动熔断器（fails/retryCount/breakerUntil）——签到成功只证明余额恢复与
-// billing 通道健康，不证明 chat 通道健康。调用方必须已持有 p.mu。
+// Не изменять CoolSoft Backoff мягкого rate-limit,softStreak и modelCooldowns（6004 реестр уровня модели):
+// доказательством восстановления двух последних является истечение сброса wall-clock апстрима или успешный пробинг, а не "на балансе есть деньги». Обновление баланса
+// периодическая задача (каждые 5 минут) через ReenableIfCredits Достигнута эта точка — если здесь очистить весь домен кулдауна,
+// Фактическое время жизни любого охлаждения лимитера сжато в один цикл обновления:6004 Ошибочное срабатывание лимита после очистки реестра
+// здоров, перевыбрать и снова хит 429，Защита кулдауном всего пула фиктивна (воспроизведено на пуле из двух аккаунтов).softStreak
+// также сохраняется: счётчик бэкоффа не зависит от баланса, определяется NoteSuccess（успех — сильнейшее доказательство восстановления) или естественное истечение
+// Сходимость. Жёсткий кулдаун (CoolHard）авторитетное подтверждение восстановления — восстановление баланса (remain>0），разморозка как прежде.
+// Не трогать circuit breaker (fails/retryCount/breakerUntil）——Успешный чекин подтверждает лишь восстановление баланса и
+// billing Канал здоров ≠ доказательство chat канал исправен. Вызывающая сторона должна уже иметь p.mu。
 func (p *Pool) reviveCoolingLocked(e *entry, credits, total int64) {
 	e.credits = credits
 	e.creditsTotal = total

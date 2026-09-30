@@ -1,6 +1,6 @@
-// trial.go global 专属「一次性 trial 加油包」领取：POST {billingBase}/billing/ide/trial。
-// 仅 global 账号适用（CN 无此端点）；幂等码 14051 = 已领过（视为正常，非错误）。
-// 这是 global 唯一天然的积分增益动作（无签到/任务中心，见 PLAN D4）。
+// trial.go global Эксклюзивный "одноразовый trial получение пакета "дозаправка»:POST {billingBase}/billing/ide/trial。
+// Только global Применимо к аккаунту (CN нет такой конечной точки); идемпотентный код 14051 = Уже получено (считается нормой, не ошибкой).
+// это global единственное естественное действие начисления баллов (без чекина/центр задач, см. PLAN D4）。
 package upstream
 
 import (
@@ -12,17 +12,17 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// trialPath global trial 加油包端点（Maquer/workbuddy-checkin 实测）。
+// trialPath global trial Эндпоинт пакета дозаправки (Maquer/workbuddy-checkin факт. замер).
 const trialPath = "/billing/ide/trial"
 
-// trialAlreadyMarkers 幂等码 14051「已领取过」的两种指纹：
-// - "code=14051"：doJSON 对 HTTP 200 + 业务 code 非 0 时拼出的 Msg 格式；
-// - `"code":14051`：HTTP ≥400 时 doJSON 把原始 JSON body 直接塞进 Msg。
+// trialAlreadyMarkers Код идемпотентности 14051「два отпечатка "уже получено»:
+// - "code=14051"：doJSON Для HTTP 200 + Бизнес code не 0 собранный в момент Msg Формат;
+// - `"code":14051`：HTTP ≥400 Время doJSON исходный JSON body Прямо поместить в Msg。
 var trialAlreadyMarkers = []string{"code=14051", `"code":14051`}
 
-// ClaimTrial 领取一次性 trial 加油包。仅 global 账号可调（CN 无此端点）：
-// 非 global → 直接报错（工具层还会再拦一道，这里是客户端侧防线）。
-// 返回 claimed：true=成功新领；false=已领过（幂等，不算失败）。
+// ClaimTrial Получить одноразовый trial доп-пакет. Только global Настраивается на уровне аккаунта (CN нет такого эндпоинта):
+// не global → сразу ошибка (слой tools дополнительно проверит, это защита на стороне клиента).
+// вернуть claimed：true=успешно получено заново;false=Уже получено (идемпотентно, не считается ошибкой).
 func (c *Client) ClaimTrial(a *auth.Auth) (claimed bool, err error) {
 	if a == nil || a.Realm() != "global" {
 		return false, fmt.Errorf("claim trial: only global accounts")
@@ -31,14 +31,14 @@ func (c *Client) ClaimTrial(a *auth.Auth) (claimed bool, err error) {
 	if err != nil {
 		var ue *Error
 		if errors.As(err, &ue) && trialAlreadyErr(ue.Msg) {
-			return false, nil // 已领过：幂等成功，非错误
+			return false, nil // Уже получено: идемпотентный успех, не ошибка
 		}
 		return false, err
 	}
 	return true, nil
 }
 
-// trialAlreadyErr 判定错误 Msg 是否携带幂等码 14051（已领取过）。
+// trialAlreadyErr Ошибка решения Msg Наличие кода идемпотентности 14051（уже получено).
 func trialAlreadyErr(msg string) bool {
 	for _, m := range trialAlreadyMarkers {
 		if strings.Contains(msg, m) {

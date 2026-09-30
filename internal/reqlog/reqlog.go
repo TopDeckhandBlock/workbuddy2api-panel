@@ -1,9 +1,9 @@
-// Package reqlog 记录脱敏的请求级指标与可选 JSONL 归档。
+// Package reqlog запись десенсибилизированных метрик уровня запроса и опционально JSONL Архивировать.
 //
-// 内存指标有界保存最近 100 条并维护进程级计数；磁盘归档只写请求元数据，
-// 不写提示词、响应正文、Authorization 或其它凭证。可选的调用来源（客户端 IP /
-// User-Agent，见 Event.ClientIP/UserAgent）由 server 按配置开关决定是否填充。
-// 归档队列满时丢弃并计数，不允许日志写盘阻塞模型请求。
+// Метрики памяти — ограниченное хранение последних 100 записей и ведение счетчика на уровне процесса; архивация на диск пишет только метаданные запроса,
+// не писать промпт, тело ответа,Authorization или другие учетные данные. Опциональный источник вызова (клиент IP /
+// User-Agent，См. Event.ClientIP/UserAgent）От server заполнение определяется флагом конфигурации.
+// При переполнении очереди архивации отбросить и посчитать, запись лога на диск не должна блокировать запросы к модели.
 package reqlog
 
 import (
@@ -22,14 +22,14 @@ import (
 )
 
 const (
-	recentLimit     = 100
-	defaultFileMax  = int64(16 << 20)
-	defaultQueue    = 1024
-	defaultReadMax  = 1000
+	recentLimit = 100
+	defaultFileMax = int64(16 << 20)
+	defaultQueue = 1024
+	defaultReadMax = 1000
 	archiveFileGlob = "requests-*.jsonl"
 )
 
-// NewRequestID 生成不含用户信息的本地请求 ID。
+// NewRequestID Сгенерировать локальный запрос без пользовательских данных ID。
 func NewRequestID() string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err == nil {
@@ -39,100 +39,100 @@ func NewRequestID() string {
 }
 
 const (
-	OutcomeSuccess     = "success"
-	OutcomeHTTPError   = "http_error"
+	OutcomeSuccess = "success"
+	OutcomeHTTPError = "http_error"
 	OutcomeStreamError = "stream_error"
 	OutcomeInterrupted = "interrupted"
 )
 
-// Config 归档参数。Enabled=false 时仍保留内存指标。
+// Config параметры архивации.Enabled=false при этом метрики памяти сохраняются.
 type Config struct {
-	Dir           string
-	Enabled       bool
+	Dir string
+	Enabled bool
 	RetentionDays int
-	MaxBytes      int64
-	FileMaxBytes  int64
-	QueueSize     int
+	MaxBytes int64
+	FileMaxBytes int64
+	QueueSize int
 }
 
-// Event 是一条脱敏请求记录。Account 只保存“昵称(uid8)”标签，不保存完整 UID。
+// Event — десенсибилизированная запись запроса.Account Сохранять только“никнейм(uid8)”тег, полный не сохраняется UID。
 //
-// ClientIP / UserAgent 是**调用来源**：面板「运行日志」用它回答"这条请求是谁打进来的"。
-// 二者由 server 侧按 logging.request_client_info 开关决定是否填充（关掉即保持空串，
-// 归档里不会出现来源字段）——来源信息比 token 计数敏感，运营可自行决定是否落盘。
-// 仍然不写提示词、响应正文、Authorization 或其它凭证。
+// ClientIP / UserAgent Да**Источник вызова**：Панель "Журнал выполнения» отвечает этим на"Кто отправил этот запрос"。
+// Оба определяются server боковое нажатие logging.request_client_info Переключатель определяет заполнение (выкл. — остается пустая строка,
+// в архиве поле источника не появится) — информация об источнике важнее token Чувствительно к подсчёту, сохранение на диск на усмотрение эксплуатации.
+// По-прежнему не писать промпт, тело ответа,Authorization или другие учетные данные.
 type Event struct {
-	Time             time.Time `json:"time"`
-	RequestID        string    `json:"request_id"`
-	Path             string    `json:"path"`
-	Account          string    `json:"account,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	Status           int       `json:"status"`
-	OK               bool      `json:"ok"`
-	Outcome          string    `json:"outcome"`
-	DurationMs       int64     `json:"duration_ms"`
-	TTFBMs           int64     `json:"ttfb_ms,omitempty"`
-	Attempts         int       `json:"attempts,omitempty"`
-	PromptTokens     int64     `json:"prompt_tokens,omitempty"`
-	CompletionTokens int64     `json:"completion_tokens,omitempty"`
-	TotalTokens      int64     `json:"total_tokens,omitempty"`
-	Credit           float64   `json:"credit,omitempty"`
-	HasCredit        bool      `json:"credit_known"`
-	ClientIP         string    `json:"client_ip,omitempty"`
-	UserAgent        string    `json:"user_agent,omitempty"`
+	Time time.Time `json:"time"`
+	RequestID string `json:"request_id"`
+	Path string `json:"path"`
+	Account string `json:"account,omitempty"`
+	Model string `json:"model,omitempty"`
+	Status int `json:"status"`
+	OK bool `json:"ok"`
+	Outcome string `json:"outcome"`
+	DurationMs int64 `json:"duration_ms"`
+	TTFBMs int64 `json:"ttfb_ms,omitempty"`
+	Attempts int `json:"attempts,omitempty"`
+	PromptTokens int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64 `json:"completion_tokens,omitempty"`
+	TotalTokens int64 `json:"total_tokens,omitempty"`
+	Credit float64 `json:"credit,omitempty"`
+	HasCredit bool `json:"credit_known"`
+	ClientIP string `json:"client_ip,omitempty"`
+	UserAgent string `json:"user_agent,omitempty"`
 }
 
-// Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），
-// 便于面板用一段 IP 前缀或 UA 片段捞请求；From/To 是闭区间（零值 = 该侧不设界），
-// 供「今天 / 近 7 天 / 自定义区间」这类时间查询使用。
+// Filter Для фильтрации последних записей из архива. Строковые поля — всегда по вхождению (без учета регистра),
+// удобно панели использовать один отрезок IP Префикс или UA фрагмент вытягивает запрос;From/To является закрытым интервалом (нулевое значение = На этой стороне лимит не задаётся),
+// для "сегодня / Близко 7 день / Используется для временных запросов типа "пользовательский интервал».
 type Filter struct {
-	Outcome   string
-	Account   string
-	Model     string
-	ClientIP  string
+	Outcome string
+	Account string
+	Model string
+	ClientIP string
 	UserAgent string
-	From      time.Time
-	To        time.Time
+	From time.Time
+	To time.Time
 }
 
-// ArchiveStats 归档存储状态。
+// ArchiveStats состояние архивного хранения.
 type ArchiveStats struct {
-	Enabled       bool   `json:"enabled"`
-	Dir           string `json:"dir,omitempty"`
-	Files         int    `json:"files"`
-	Bytes         int64  `json:"bytes"`
+	Enabled bool `json:"enabled"`
+	Dir string `json:"dir,omitempty"`
+	Files int `json:"files"`
+	Bytes int64 `json:"bytes"`
 	DroppedWrites uint64 `json:"dropped_writes"`
-	LastError     string `json:"last_error,omitempty"`
+	LastError string `json:"last_error,omitempty"`
 }
 
-// Snapshot 一次面板读取的完整指标快照。
+// Snapshot полный снапшот метрик одного чтения панели.
 type Snapshot struct {
-	StartedAt       time.Time    `json:"started_at"`
-	Completed       int64        `json:"completed"`
-	InFlight        int64        `json:"in_flight"`
-	Succeeded       int64        `json:"succeeded"`
-	Failed          int64        `json:"failed"`
-	SuccessRate     float64      `json:"success_rate"`
-	HTTPSuccessRate float64      `json:"http_success_rate"`
-	AvgDurationMs   float64      `json:"avg_duration_ms"`
-	Recent          []Event      `json:"recent"`
-	Archive         ArchiveStats `json:"archive"`
+	StartedAt time.Time `json:"started_at"`
+	Completed int64 `json:"completed"`
+	InFlight int64 `json:"in_flight"`
+	Succeeded int64 `json:"succeeded"`
+	Failed int64 `json:"failed"`
+	SuccessRate float64 `json:"success_rate"`
+	HTTPSuccessRate float64 `json:"http_success_rate"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+	Recent []Event `json:"recent"`
+	Archive ArchiveStats `json:"archive"`
 }
 
-// Recorder 并发安全的有界请求指标与归档记录器。
+// Recorder потокобезопасный ограниченный регистратор метрик запросов и архивации.
 type Recorder struct {
-	mu          sync.Mutex
-	started     time.Time
-	inFlight    int64
-	completed   int64
-	succeeded   int64
+	mu sync.Mutex
+	started time.Time
+	inFlight int64
+	completed int64
+	succeeded int64
 	httpSuccess int64
 	durationSum int64
-	recent      []Event
-	archive     *archiveWriter
+	recent []Event
+	archive *archiveWriter
 }
 
-// New 创建记录器；Dir 为空或 Enabled=false 时只启用内存指标。
+// New Создать логгер;Dir Пусто или Enabled=false в этом режиме включены только метрики памяти.
 func New(cfg Config) *Recorder {
 	if cfg.FileMaxBytes <= 0 {
 		cfg.FileMaxBytes = defaultFileMax
@@ -145,7 +145,7 @@ func New(cfg Config) *Recorder {
 	return r
 }
 
-// Begin 标记一个请求进入处理。
+// Begin Пометить запрос как взятый в обработку.
 func (r *Recorder) Begin() {
 	if r == nil {
 		return
@@ -155,7 +155,7 @@ func (r *Recorder) Begin() {
 	r.mu.Unlock()
 }
 
-// Record 记录一个请求完成事件并写入归档队列。
+// Record записать событие завершения запроса и отправить в очередь архивации.
 func (r *Recorder) Record(e Event) {
 	if r == nil {
 		return
@@ -192,7 +192,7 @@ func (r *Recorder) Record(e Event) {
 	}
 }
 
-// Snapshot 返回进程内指标和归档状态。
+// Snapshot Возвращает внутрипроцессные метрики и статус архивации.
 func (r *Recorder) Snapshot() Snapshot {
 	if r == nil {
 		return Snapshot{}
@@ -201,9 +201,9 @@ func (r *Recorder) Snapshot() Snapshot {
 	s := Snapshot{
 		StartedAt: r.started,
 		Completed: r.completed,
-		InFlight:  r.inFlight,
+		InFlight: r.inFlight,
 		Succeeded: r.succeeded,
-		Recent:    append([]Event(nil), r.recent...),
+		Recent: append([]Event(nil), r.recent...),
 	}
 	if r.completed > 0 {
 		s.Failed = r.completed - r.succeeded
@@ -218,7 +218,7 @@ func (r *Recorder) Snapshot() Snapshot {
 	return s
 }
 
-// ReadArchive 返回最近的归档事件（按时间倒序）。limit<=0 时回落 200，最大 1000。
+// ReadArchive Возвращает последнее архивное событие (сортировка по времени убыв.).limit<=0 откат при 200，Максимум 1000。
 func (r *Recorder) ReadArchive(limit int, filter Filter) ([]Event, error) {
 	if r == nil || r.archive == nil {
 		return nil, nil
@@ -226,7 +226,7 @@ func (r *Recorder) ReadArchive(limit int, filter Filter) ([]Event, error) {
 	return r.archive.read(limit, filter)
 }
 
-// Close 刷盘并停止后台归档。
+// Close Сбросить на диск и остановить фоновое архивирование.
 func (r *Recorder) Close() {
 	if r == nil || r.archive == nil {
 		return
@@ -239,19 +239,19 @@ func round1(v float64) float64 {
 }
 
 type archiveWriter struct {
-	cfg       Config
-	ch        chan Event
-	stop      chan struct{}
-	done      chan struct{}
+	cfg Config
+	ch chan Event
+	stop chan struct{}
+	done chan struct{}
 	closeOnce sync.Once
-	dropped   atomic.Uint64
+	dropped atomic.Uint64
 	lastErrMu sync.Mutex
-	lastErr   string
+	lastErr string
 
 	file *os.File
-	buf  *bufio.Writer
+	buf *bufio.Writer
 	path string
-	day  string
+	day string
 	size int64
 }
 
@@ -272,8 +272,8 @@ func newArchiveWriter(cfg Config) *archiveWriter {
 		cfg.QueueSize = defaultQueue
 	}
 	w := &archiveWriter{
-		cfg:  cfg,
-		ch:   make(chan Event, cfg.QueueSize),
+		cfg: cfg,
+		ch: make(chan Event, cfg.QueueSize),
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
@@ -474,8 +474,8 @@ func (w *archiveWriter) prune() {
 		return
 	}
 	type item struct {
-		path  string
-		size  int64
+		path string
+		size int64
 		mtime time.Time
 	}
 	items := make([]item, 0, len(entries))
@@ -523,7 +523,7 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 		return nil, err
 	}
 	type fileItem struct {
-		path  string
+		path string
 		mtime time.Time
 	}
 	files := make([]fileItem, 0, len(entries))
@@ -600,7 +600,7 @@ func (f Filter) match(e Event) bool {
 	return true
 }
 
-// containsFold 大小写不敏感的子串匹配；needle 为空视为命中（不筛该字段）。
+// containsFold Подстрочный поиск без учета регистра;needle Пустое считается попаданием (поле не фильтруется).
 func containsFold(haystack, needle string) bool {
 	if needle == "" {
 		return true

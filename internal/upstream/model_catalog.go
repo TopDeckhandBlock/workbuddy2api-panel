@@ -1,20 +1,20 @@
-// model_catalog.go context_length / max_output_tokens 四级查找链 + model.json
-// 本地缓存（任务书 model-json-dynamic）。
+// model_catalog.go context_length / max_output_tokens Четырёхуровневая цепочка поиска + model.json
+// Локальный кеш (ТЗ model-json-dynamic）。
 //
-// 查找链（32a3c13 三级 → 四级，上游动态值永远权威不变）：
-//  1. 上游动态值（ModelInfo.ContextWindow/MaxTokens）——权威，永远压过 model.json
-//     （即使后者更新：上游才是权威，任务书 §清理）；
-//  2. 静态种子表（context_catalog.go 的 contextCapFallback，编译期兜底）；
-//  3. model.json 本地缓存（数据目录，含运行时从 models.dev 补的值 + 仓库种子
-//     embed 的初值）；损坏 → 降级种子并 WARN 不崩溃（手动维护入口的容错）；
-//  4. 触发 models.dev 按需拉取（异步，不阻塞本次响应）→ 值写入 model.json →
-//     本次先落 1M/省略，下次命中缓存；负缓存 24h。
+// Цепочка поиска (32a3c13 третий уровень → четыре уровня, динамическое значение апстрима всегда авторитетно):
+// 1. динамическое значение upstream (ModelInfo.ContextWindow/MaxTokens）——авторитетно, всегда переопределяет model.json
+// （даже если последнее обновится: апстрим — источник истины, ТЗ §очистка);
+// 2. Статическая таблица сидов (context_catalog.go contextCapFallback，фолбэк на этапе компиляции);
+// 3. model.json локальный кэш (каталог данных, включая загруженное во время выполнения из models.dev дополняющее значение + Сид репозитория
+// embed начального значения); повреждение → деградировать seed и WARN без краша (отказоустойчивость ручного входа обслуживания);
+// 4. Триггер models.dev Подгрузка по требованию (асинхронно, без блокировки текущего ответа)→ Запись значения model.json →
+// В этот раз сначала записать 1M/пропуск, следующее попадание в кэш; негативный кэш 24h。
 //
-// model.json 读写并发安全（单 sync.Mutex 全程持锁 + 原子落盘 tmp+rename，
-// 多请求同时 miss 同一模型只写一次）；文件损坏/不可写均静默降级（种子表→1M）。
+// model.json Потокобезопасность чтения/записи (один sync.Mutex Блокировка на всё время + Атомарная запись на диск tmp+rename，
+// Несколько запросов одновременно miss одна модель пишется только один раз); файл поврежден/незаписываемость — тихий даунгрейд (таблица сидов→1M）。
 //
-// 状态归属：包级 catalogState 单例（与 modelsDev fetcher 同模式，进程一份）。
-// 测试用 resetModelCatalog / loadModelCatalogAt 隔离。
+// принадлежность состояния: уровень пакета catalogState синглтон (с modelsDev fetcher тот же режим, один на процесс).
+// Для тестов resetModelCatalog / loadModelCatalogAt Изоляция.
 package upstream
 
 import (
@@ -28,41 +28,41 @@ import (
 	"time"
 )
 
-// modelSeedFS 仓库种子版 model.json（context_catalog 静态表 27 值迁移，source=seed）。
-// 只作 model.json 缺失时的初值来源；运行目录的 model.json 一旦存在则以它为准
-// （用户手动维护入口——直接编辑文件，格式容错由 loadModelCatalog 的校验兜底）。
+// modelSeedFS Сид-версия репозитория model.json（context_catalog Статическая таблица 27 миграция значения,source=seed）。
+// Только model.json Источник начального значения при отсутствии; рабочего каталога model.json Если существует — приоритет за ним
+// （Точка ручного обслуживания пользователем — прямое редактирование файла, толерантность формата обеспечивает loadModelCatalog страхующая валидация).
 //
 //go:embed model.json
 var modelSeedFS embed.FS
 
-// ModelCapEntry model.json 单条目（与静态表同字段口径 + 来源与抓取时间）。
-// Source：seed（仓库种子迁移）/ modelsdev（运行时按需拉取）/ manual（用户手编
-// ——无法区分手编与 seed，手编条目保留其原 source 字符串，语义等同「非拉取」）。
-// Context 必须 >0（零/负条目校验拒绝）；MaxOutput 0 = 输出上限未知 → 省略字段。
+// ModelCapEntry model.json одиночная запись (с той же схемой полей, что и статическая таблица + источник и время сбора).
+// Source：seed（миграция сидов репозитория)/ modelsdev（загрузка по требованию в рантайме)/ manual（Ручной ввод пользователя
+// ——Невозможно отличить ручной ввод от seed，Ручные записи сохраняют исходный source строка, семантически эквивалентно "не pull»).
+// Context Обязательно >0（Ноль/отклонено проверкой отрицательных записей);MaxOutput 0 = Верхний лимит вывода неизвестен → Пропустить поле.
 type ModelCapEntry struct {
-	ContextLength   int64  `json:"context_length"`
-	MaxOutputTokens int64  `json:"max_output_tokens,omitempty"`
-	FetchedAt       string `json:"fetched_at,omitempty"` // RFC3339；seed 条目为空
-	Source          string `json:"source"`
+	ContextLength int64 `json:"context_length"`
+	MaxOutputTokens int64 `json:"max_output_tokens,omitempty"`
+	FetchedAt string `json:"fetched_at,omitempty"` // RFC3339；seed Запись пуста
+	Source string `json:"source"`
 }
 
-// modelCatalog model.json 缓存状态机（包级 catalogState 单例的字段载体）。
+// modelCatalog model.json кэш-автомат (уровень пакета catalogState носитель полей синглтона).
 type modelCatalog struct {
 	mu sync.Mutex
 
-	path    string // 落盘路径（空 = 禁用持久化：纯内存 + 种子）
+	path string // Путь сохранения на диск (пусто = персистентность отключена: только в памяти + сид)
 	entries map[string]ModelCapEntry
-	loaded  bool // entries 已初始化（含损坏降级形态）
+	loaded bool // entries уже инициализировано (включая деградированный режим при повреждении)
 }
 
-// catalogState 包级单例：全进程一份 model.json 状态。
+// catalogState синглтон уровня пакета: один на весь процесс model.json статус.
 var catalogState = &modelCatalog{}
 
-// initModelCatalogLocked 确保 entries 已加载（持锁调用）：
-//   - 运行目录 model.json 存在且合法 → 全量加载（校验失败的条目剔除并 WARN）；
-//   - 文件不存在 / 整体损坏（非法 JSON）→ 种子 embed 初值（不落盘：保持「用户
-//     尚无缓存」状态，首次拉取成功后再落盘）；
-//   - path 为空（未接线，如测试/工具进程）→ 种子初值。
+// initModelCatalogLocked Обеспечить entries Уже загружено (вызов с удержанием блокировки):
+// - Рабочая директория model.json существует и валиден → Полная загрузка (невалидные записи отбрасываются и WARN）；
+// - Файл не существует / повреждение целиком (невалидный JSON）→ сид embed Начальное значение (без сохранения на диск: сохранять "пользователь
+// состояние "кэша пока нет», запись на диск только после первого успешного получения);
+// - path пусто (не подключено, напр. тест/процесс-инструмент)→ Начальное значение сида.
 func (c *modelCatalog) initLocked() {
 	if c.loaded {
 		return
@@ -75,32 +75,32 @@ func (c *modelCatalog) initLocked() {
 	}
 	raw, err := os.ReadFile(c.path)
 	if err != nil {
-		// 不存在 / 不可读 → 种子（首次启动形态）。
+		// не существует / нечитаемо → Сид (форма при первом запуске).
 		c.loadSeedLocked()
 		return
 	}
 	var file map[string]ModelCapEntry
 	if err := json.Unmarshal(raw, &file); err != nil {
-		// 整体损坏：降级种子 + WARN 不崩溃（任务书 §手动维护入口容错）。
-		log.Printf("WARN: [upstream] model.json 损坏（降级内置种子表）: path=%s err=%v", c.path, err)
+		// полное повреждение: fallback-сид + WARN без краша (ТЗ §отказоустойчивость точки входа на ручном обслуживании).
+		log.Printf("WARN: [upstream] model.json повреждён (фолбэк на встроенную таблицу сидов): path=%s err=%v", c.path, err)
 		c.loadSeedLocked()
 		return
 	}
 	for id, e := range file {
 		if !validCapEntry(e) {
-			log.Printf("WARN: [upstream] model.json 条目非法剔除: model=%s entry=%+v", id, e)
+			log.Printf("WARN: [upstream] model.json отсев невалидных записей: model=%s entry=%+v", id, e)
 			continue
 		}
 		c.entries[id] = e
 	}
 }
 
-// loadSeedLocked 把仓库种子 model.json 灌入 entries（持锁调用）。
+// loadSeedLocked Сид репозитория model.json впрыск entries（Вызов с удержанием блокировки).
 func (c *modelCatalog) loadSeedLocked() {
 	raw, err := modelSeedFS.ReadFile("model.json")
 	if err != nil {
-		// embed 编译期保证存在，理论不可达；防御性兜底走静态表（initLocked 调用方
-		// 查找链第 2 级本来就会兜，这里只需保持 entries 为空）。
+		// embed Гарантируется на этапе компиляции, теоретически недостижимо; защитный фолбэк через статическую таблицу (initLocked вызывающая сторона
+		// поиск по цепочке № 2 уровень и так фолбэчит, здесь достаточно сохранить entries пусто).
 		return
 	}
 	var seed map[string]ModelCapEntry
@@ -114,13 +114,13 @@ func (c *modelCatalog) loadSeedLocked() {
 	}
 }
 
-// validCapEntry 条目级校验：context 正数 + 输出非负（任务书 §值校验的写入侧）。
+// validCapEntry Проверка на уровне записи:context Положительное число + вывод неотрицательный (ТЗ §сторона записи с валидацией значения).
 func validCapEntry(e ModelCapEntry) bool {
 	return e.ContextLength > 0 && e.MaxOutputTokens >= 0
 }
 
-// get 查 model.json 缓存（第 3 级）。返回条目与是否命中。
-// 只读内存，不发网络；加载与网络动作由 ensure/触发侧负责。
+// get проверить model.json Кэш (№ 3 уровень). Вернуть записи и факт попадания.
+// Только чтение памяти, без сети; загрузка и сетевые действия — ensure/отвечает сторона-триггер.
 func (c *modelCatalog) get(model string) (ModelCapEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -132,9 +132,9 @@ func (c *modelCatalog) get(model string) (ModelCapEntry, bool) {
 	return e, true
 }
 
-// put 写一条缓存（第 4 级拉取成功后调用）并落盘。同模型已存在（用户手动维护过）
-// 仍覆盖——运行时拉取值采信 models.dev 官方源优先口径，比手编更可信；
-// 若不希望覆盖，删掉 model.json 里对应条目即可（加载后手编值只在本次进程生效）。
+// put запись одного кэша (№ 4 уровня вызывается после успешной загрузки) и сохраняется на диск. Та же модель уже существует (обслуживалась вручную)
+// всё равно перезаписывает — в рантайме приоритет у значения из pull models.dev Приоритет официального источника, достовернее ручного ввода;
+// если не нужно перезаписывать, удалите model.json достаточно соответствующей записи в (значение, введенное вручную после загрузки, действует только в текущем процессе).
 func (c *modelCatalog) put(model string, e ModelCapEntry) {
 	if model == "" || !validCapEntry(e) {
 		return
@@ -146,13 +146,13 @@ func (c *modelCatalog) put(model string, e ModelCapEntry) {
 	c.saveLocked()
 }
 
-// saveLocked 原子落盘（tmp + rename，pool state.json 同模式）。持锁调用。
-// path 为空 / 目录不可写 / 序列化失败 → 静默（内存缓存仍生效，下次进程重拉）。
+// saveLocked Атомарная запись на диск (tmp + rename，pool state.json тот же режим). вызов под блокировкой.
+// path пусто / каталог недоступен для записи / Ошибка сериализации → тихо (кэш в памяти остаётся активным, при следующем процессе — повторная загрузка).
 func (c *modelCatalog) saveLocked() {
 	if c.path == "" {
 		return
 	}
-	raw, err := json.MarshalIndent(c.entries, "", "  ")
+	raw, err := json.MarshalIndent(c.entries, "", " ")
 	if err != nil {
 		return
 	}
@@ -161,19 +161,19 @@ func (c *modelCatalog) saveLocked() {
 	}
 	tmp := c.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("WARN: [upstream] model.json 落盘失败（内存缓存仍生效）: path=%s err=%v", c.path, err)
+		log.Printf("WARN: [upstream] model.json Ошибка записи на диск (кэш в памяти всё ещё активен): path=%s err=%v", c.path, err)
 		return
 	}
 	if err := os.Rename(tmp, c.path); err != nil {
-		log.Printf("WARN: [upstream] model.json 落盘改名失败: path=%s err=%v", c.path, err)
+		log.Printf("WARN: [upstream] model.json ошибка переименования при сохранении на диск: path=%s err=%v", c.path, err)
 	}
 }
 
-// ---- 包级 API（查找链 3/4 级 + 接线）----
+// ---- на уровне пакета API（цепочка поиска 3/4 Уровень + подключение)----
 
-// SetModelCatalogPath 接线 model.json 落盘路径（cmd/server 启动时调用，
-// 数据目录与 state.json 同风格）。首次调用生效；后续调用在已加载后仅更新路径
-// （不重载——进程内以内存 entries 为准）。
+// SetModelCatalogPath подключение model.json путь сохранения на диск (cmd/server вызов при старте,
+// Каталог данных и state.json в том же стиле). Первый вызов применяется; последующие после загрузки обновляют только путь
+// （без перезагрузки — внутри процесса в памяти entries считать эталоном).
 func SetModelCatalogPath(path string) {
 	c := catalogState
 	c.mu.Lock()
@@ -181,27 +181,27 @@ func SetModelCatalogPath(path string) {
 	c.path = path
 }
 
-// modelCatalogGet 第 3 级：model.json 缓存命中（内含种子初值与损坏降级）。
+// modelCatalogGet № 3 Уровень:model.json попадание в кэш (содержит начальное значение seed и деградацию при повреждении).
 func modelCatalogGet(model string) (ModelCapEntry, bool) {
 	return catalogState.get(model)
 }
 
-// modelCatalogPut 第 4 级写入：models.dev 拉到的值落缓存（含落盘）。
+// modelCatalogPut № 4 запись уровня:models.dev полученное значение попадает в кэш (с записью на диск).
 func modelCatalogPut(model string, context, maxOutput int64) {
 	modelCatalogPutSourced(model, context, maxOutput, "modelsdev")
 }
 
-// modelCatalogPutSourced 写入指定来源的条目（测试可注入 fetched_at 检查落盘格式）。
+// modelCatalogPutSourced Запись элемента указанного источника (тест может инжектировать fetched_at проверить формат записи на диск).
 func modelCatalogPutSourced(model string, context, maxOutput int64, source string) {
 	catalogState.put(model, ModelCapEntry{
-		ContextLength:   context,
+		ContextLength: context,
 		MaxOutputTokens: maxOutput,
-		FetchedAt:       time.Now().UTC().Format(time.RFC3339),
-		Source:          source,
+		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+		Source: source,
 	})
 }
 
-// resetModelCatalog 测试隔离：清空单例状态（entries/path/loaded）。
+// resetModelCatalog изоляция тестов: сброс состояния синглтона (entries/path/loaded）。
 func resetModelCatalog() {
 	c := catalogState
 	c.mu.Lock()
@@ -211,8 +211,8 @@ func resetModelCatalog() {
 	c.loaded = false
 }
 
-// loadModelCatalogAt 测试接线：指向指定路径后立即触发一次加载（同步，可断言文件
-// 解析行为）。生产路径用 SetModelCatalogPath（惰性首次 get 触发加载）。
+// loadModelCatalogAt Тестовая обвязка: после указания пути сразу триггерит загрузку (синхронно, можно ассертить файл
+// поведение парсинга). В проде используется SetModelCatalogPath（ленивая инициализация при первом обращении get триггер загрузки).
 func loadModelCatalogAt(path string) {
 	SetModelCatalogPath(path)
 	catalogState.mu.Lock()
@@ -220,23 +220,23 @@ func loadModelCatalogAt(path string) {
 	catalogState.initLocked()
 }
 
-// ResetLookupChainForTest 跨包测试钩子：清空 model.json 缓存与 models.dev fetcher
-// 的全部包级单例状态（含在途拉取冷却——防 server 包测试末尾的异步 goroutine 打
-// 真网、防跨测试缓存污染）。仅测试引用（upstream 包内用 resetModelsDev /
-// resetModelCatalog 等价内联）。
+// ResetLookupChainForTest Межпакетный тестовый хук: очистка model.json Кэш и models.dev fetcher
+// все singleton-состояния уровня пакета (вкл. cooldown выборки в процессе — защита server Асинхронность в конце теста пакета goroutine ввод
+// реальная сеть, защита от кросс-тестового загрязнения кэша). Только тестовая ссылка (upstream внутри пакета resetModelsDev /
+// resetModelCatalog эквивалент inline).
 func ResetLookupChainForTest() {
 	resetModelCatalog()
 	resetModelsDev()
 }
 
-// ---- 四级查找链（对 handler 暴露的入口，签名与 32a3c13 三级版兼容）----
+// ---- Четырёхуровневая цепочка поиска (для handler открытый вход, подпись и 32a3c13 совместимость с трёх-уровневой версией)----
 
-// ContextWindowListingV4 四级查找链的 context_length 决策：
-//  1. remote>0 权威透出（上游动态值永远压过 model.json，任务书 §清理）；
-//  2. 静态种子表（contextCapFallback）；
-//  3. model.json 缓存（内含种子初值 / models.dev 运行时补充值）；
-//  4. 全链 miss 且非负缓存 → 异步触发 models.dev 拉取（本次返回 DefaultContextWindow
-//     1M，不阻塞；拉到后写 model.json 供下次命中）。
+// ContextWindowListingV4 четырёхуровневой цепочки поиска context_length Решение:
+// 1. remote>0 Приоритет источника (динамическое значение upstream всегда переопределяет model.json，ТЗ §очистка);
+// 2. Статическая таблица сидов (contextCapFallback）；
+// 3. model.json кэш (содержит начальное значение seed / models.dev значение, дополненное в рантайме);
+// 4. Вся цепочка miss и неотрицательный кэш → Асинхронный триггер models.dev Выгрузка (в этот раз возвращено DefaultContextWindow
+// 1M，Без блокировки; запись после получения model.json для следующего попадания).
 func ContextWindowListingV4(model string, remote int64, client *http.Client) int64 {
 	if remote > 0 {
 		return remote
@@ -245,25 +245,25 @@ func ContextWindowListingV4(model string, remote int64, client *http.Client) int
 		return DefaultContextWindow
 	}
 	if cap, ok := contextCapFallback[model]; ok && cap.context > 0 {
-		return cap.context // 第 2 级：静态种子表（编译期兜底，永远可用）
+		return cap.context // № 2 Уровень: статическая seed-таблица (фолбэк на этапе компиляции, всегда доступна)
 	}
 	if e, ok := modelCatalogGet(model); ok {
-		return e.ContextLength // 第 3 级：model.json
+		return e.ContextLength // № 3 Уровень:model.json
 	}
 	if !modelsDev.negativeFresh(model) {
-		// 第 4 级触发：先查进程内文档索引（拉过一次即常驻），命中直接入缓存
-		// 返回（不等待异步拉取）；未命中 → 记负缓存 + 异步拉取（本次先回 1M）。
+		// № 4 триггер уровня: сначала поиск в in-process индексе документов (после одной загрузки — резидент), при хите сразу в кэш
+		// возврат (без ожидания асинхронной выборки); промах → Записать negative cache + Асинхронная загрузка (в этот раз сначала возврат 1M）。
 		if e, ok := modelsDev.lookup(model); ok {
 			modelCatalogPut(model, e.Context, e.Output)
 			return e.Context
 		}
 		modelsDev.ensureDocAsync(client, "")
 	}
-	return DefaultContextWindow // 第 4 级兜底：1M（本次先回，拉到后下次命中）
+	return DefaultContextWindow // № 4 Фолбэк уровня:1M（в этот раз вернуть сразу, после загрузки — попадание в следующий раз)
 }
 
-// MaxOutputTokensListingV4 四级查找链的 max_output_tokens 决策（与 context 口径
-// 刻意不同：未知 → 省略，无「宁可高估」安全侧）。
+// MaxOutputTokensListingV4 четырёхуровневой цепочки поиска max_output_tokens решение (и context метрика
+// Намеренно отличается: неизвестно → опущено, без запаса "лучше завысить»).
 func MaxOutputTokensListingV4(model string, remote int64, client *http.Client) (int64, bool) {
 	if remote > 0 {
 		return remote, true
@@ -272,28 +272,28 @@ func MaxOutputTokensListingV4(model string, remote int64, client *http.Client) (
 		return 0, false
 	}
 	if cap, ok := contextCapFallback[model]; ok && cap.maxOutput > 0 {
-		return cap.maxOutput, true // 第 2 级
+		return cap.maxOutput, true // № 2 Уровень
 	}
 	if e, ok := modelCatalogGet(model); ok && e.MaxOutputTokens > 0 {
-		return e.MaxOutputTokens, true // 第 3 级
+		return e.MaxOutputTokens, true // № 3 Уровень
 	}
 	if !modelsDev.negativeFresh(model) {
-		// 与 ContextWindowListingV4 同触发：lookup 命中先入缓存再返回
-		// （两条查找链并发 miss 同一模型时，第二调用方直接拿到刚写入的值）。
+		// и ContextWindowListingV4 тот же триггер:lookup при хите сначала в кэш, затем возврат
+		// （две цепочки поиска параллельно miss При одной модели второй вызывающий сразу получает только что записанное значение).
 		if e, ok := modelsDev.lookup(model); ok {
 			modelCatalogPut(model, e.Context, e.Output)
 			return e.Output, e.Output > 0
 		}
 		modelsDev.ensureDocAsync(client, "")
 	}
-	return 0, false // 第 4 级兜底：省略（输出上限不编造）
+	return 0, false // № 4 фолбэк уровня: пропуск (лимит вывода не выдумывать)
 }
 
-// ---- 第 4 级拉取值的回流（fetchDoc 成功后调用，写 model.json）----
+// ---- № 4 обратный поток значения pull уровня (fetchDoc вызывать после успеха, записать model.json）----
 
-// noteModelsDevMiss 查询未命中 models.dev 索引 → 负缓存已由 lookup 记录。
-// 本函数是 lookup + 写缓存的粘合层：fetchDoc 拉到文档后对「曾 miss 过的模型」
-// 重查一次并写入 model.json（下次 /v1/models 直接命中第 3 级）。
+// noteModelsDevMiss Промах запроса models.dev индекс → негативный кэш уже lookup запись.
+// данная функция — lookup + Клеевой слой кэша записи:fetchDoc После выгрузки в документ для "ранее miss модель»
+// повторно запросить и записать model.json（Следующий /v1/models Прямое попадание в № 3 уровень).
 func (f *modelsDevFetcher) backfillMisses() {
 	f.mu.Lock()
 	doc := f.doc
@@ -308,11 +308,11 @@ func (f *modelsDevFetcher) backfillMisses() {
 	for _, m := range missed {
 		e, ok := doc[m]
 		if !ok {
-			continue // 仍查不到：负缓存 24h 生效，不写
+			continue // все еще не найдено: негативный кеш 24h вступает в силу, не записывать
 		}
 		modelCatalogPut(m, e.Context, e.Output)
-		// 回流成功：清除负缓存条目（该模型已有值，后续走第 3 级缓存，
-		// 不再进本清单）。
+		// Успешный рефлоу: удалить запись негативного кэша (модель уже имеет значение, далее по 3 кэш уровня,
+		// больше не попадает в этот список).
 		f.mu.Lock()
 		delete(f.negatives, m)
 		f.mu.Unlock()

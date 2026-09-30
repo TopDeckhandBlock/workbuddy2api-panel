@@ -2,14 +2,14 @@ package server
 
 import "strings"
 
-// resolveModel 解析模型名协议（PLAN D6）：
+// resolveModel Парсинг протокола имени модели (PLAN D6）：
 //
-//	分布式前缀： "[realm:]model"
+//	Распределенный префикс: "[realm:]model"
 //
-// 取第一个 ":"，前段恰为 "cn"/"global" 才剥离；否则视为裸名，realm=cn、bare=原串。
-// 大小写敏感（前缀必须是精确的小写枚举）。bare 即出站/选号/账本使用的裸模型名。
+// Взять первый ":«，предыдущий сегмент как раз «cn»/«global" только тогда отрезать; иначе считать голым именем,realm=cn、bare=исходная строка.
+// Регистрозависимо (префикс должен быть точным enum в нижнем регистре).bare сразу egress/Выбор номера/Исходное имя модели, используемое в биллинге.
 //
-// 导出为 ResolveModel（cmd/server/main.go 粘性闭包需要），包内简写 resolveModel。
+// экспортировать как ResolveModel（cmd/server/main.go требуется sticky-замыкание), внутри пакета — сокр. resolveModel。
 func resolveModel(model string) (realm, bare string) {
 	idx := strings.IndexByte(model, ':')
 	if idx < 0 {
@@ -22,5 +22,5 @@ func resolveModel(model string) (realm, bare string) {
 	return prefix, model[idx+1:]
 }
 
-// ResolveModel 是 resolveModel 的导出面（跨包调用）。
+// ResolveModel Да resolveModel экспортируемый интерфейс (межпакетный вызов).
 func ResolveModel(model string) (realm, bare string) { return resolveModel(model) }

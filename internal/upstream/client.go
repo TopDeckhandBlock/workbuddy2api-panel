@@ -1,5 +1,5 @@
-// Package upstream 封装对 CodeBuddy 上游（chat / billing / auth）的全部 HTTP 调用，
-// 以及错误分类（驱动 pool 冷却状态机）。
+// Package upstream Инкапсуляция для CodeBuddy Апстрим (chat / billing / auth）Все HTTP вызов,
+// И классификация ошибок (драйвер pool стейт-машина кулдауна).
 package upstream
 
 import (
@@ -24,24 +24,24 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 )
 
-// ErrKind 错误分类，pool 据此决定冷却时长。
+// ErrKind классификация ошибок,pool На основе этого определяется длительность кулдауна.
 type ErrKind int
 
 const (
-	ErrNone           ErrKind = iota // 成功
-	ErrHardCredit                    // 余额不足（402 或 body 关键词）→ 长冷却
-	ErrSoftRate                      // 429 软限流 → 短冷却
-	ErrSessionDead                   // 401 + 12153 offline session 失效 → 禁用
-	ErrNotFound                      // 404 上游偶发 → 短冷却，不累计错误计数（防雪崩）
-	ErrServer                        // 5xx 上游故障
-	ErrContentBlocked                // 内容策略拦截（400 + 审核文案）→ 不罚账号，走降级重试
-	ErrBadParams                     // 请求体解析失败（400 + Unmarshal chat params failed / 11101）→ 不罚账号，仍轮转
-	ErrAccountFault                  // 账号级授权/配额故障（11140 request illegal / 14017 trial not activated）→ 冷却轮换，不无限重试
-	ErrModelBlocked                  // 11102「该后端无此模型」→ (账号,模型) 负缓存避让，切模型/切账号
-	ErrWafBlock                      // 403 + 非业务信封体（APISIX WAF 拦截页/空体）→ 账号软冷却 + 抖动退避
-	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
-	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
-	ErrClient                        // 其他 4xx / 业务错误
+	ErrNone ErrKind = iota // Успех
+	ErrHardCredit // Недостаточно баланса (402 Или body ключевого слова)→ Длительный кулдаун
+	ErrSoftRate // 429 мягкий rate limit → короткий кулдаун
+	ErrSessionDead // 401 + 12153 offline session Истёк → Отключено
+	ErrNotFound // 404 Спорадическая ошибка апстрима → короткое охлаждение, без накопления счётчика ошибок (защита от каскада)
+	ErrServer // 5xx Сбой апстрима
+	ErrContentBlocked // Блокировка контент-политикой (400 + текст на модерацию)→ Аккаунт не штрафуется, уход в ретрай с понижением
+	ErrBadParams // Ошибка парсинга тела запроса (400 + Unmarshal chat params failed / 11101）→ Аккаунт не штрафуется, ротация продолжается
+	ErrAccountFault // Авторизация на уровне аккаунта/Сбой квоты (11140 request illegal / 14017 trial not activated）→ ротация с cooldown, без бесконечных ретраев
+	ErrModelBlocked // 11102「бэкенд не имеет этой модели»→ (Аккаунт,Модель) обход негативного кэша, переключение модели/Смена аккаунта
+	ErrWafBlock // 403 + Небизнесовая оболочка (APISIX WAF Страница перехвата/пустое тело)→ Мягкий кулдаун аккаунта + Бэкофф с джиттером
+	ErrPromptTooLong // 11115「prompt is too long」→ ошибка уровня запроса (превышение контекста — проблема запроса, а не аккаунта): без штрафа аккаунта, без ротации, на выходе проброс оригинала
+	ErrImageInvalid // формат запроса изображения/Данные недействительны → Ошибка уровня запроса: без штрафа и ротации аккаунта, в конце проброс оригинала
+	ErrClient // прочее 4xx / Бизнес-ошибка
 )
 
 func (k ErrKind) String() string {
@@ -77,15 +77,15 @@ func (k ErrKind) String() string {
 	}
 }
 
-// Error 带分类的上游错误。
+// Error классифицированная ошибка апстрима.
 type Error struct {
-	Kind   ErrKind
+	Kind ErrKind
 	Status int
-	Msg    string
-	// RetryAfter 上游明示的等待时长（Retry-After 秒 / retry-after-ms /
-	// x-ratelimit-reset 头解析，见 ParseRetryAfter）。零值 = 上游未明示，
-	// 冷却时长回落调用方计算值。挂载点选在 Error 信封：Kind 决定「罚不罚」，
-	// RetryAfter 决定「罚多久」，同为上游响应的一等公民。
+	Msg string
+	// RetryAfter явно указанное апстримом время ожидания (Retry-After с / retry-after-ms /
+	// x-ratelimit-reset парсинг заголовка, см. ParseRetryAfter）。нулевое значение = Апстрим явно не указал,
+	// Длительность кулдауна откатывается к значению, вычисленному вызывающей стороной. Точка монтирования в Error конверт:Kind решает "штрафовать или нет»,
+	// RetryAfter определяет "на сколько штрафовать», равноправно с ответом upstream.
 	RetryAfter time.Duration
 }
 
@@ -93,95 +93,95 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("upstream %s (http %d): %s", e.Kind, e.Status, e.Msg)
 }
 
-// hardMarkers 余额不足关键词（小写比较 + 中文原文比较双通道）。
+// hardMarkers Ключевые слова недостаточного баланса (сравнение в нижнем регистре + сравнение оригинала на китайском, двухканальный).
 var hardMarkers = []string{
 	"insufficient credit", "no credit", "credit exhausted", "credits exhausted", "out of credit",
 	"quota exceeded", "quota exhaust", "payment required", "credit not enough",
 	"not enough credit",
-	"积分不足", "额度不足", "余额不足", "积分用完", "额度用尽", "没有积分",
+	"Недостаточно баллов", "Недостаточно лимита", "Недостаточно средств", "баллы исчерпаны", "лимит исчерпан", "Нет баллов",
 }
 
-// softRateMarkers 限流/节流关键词（小写比较 + 中文原文比较双通道）。
-// 上游在状态码非 429 时也会返回限流语义（如 200 + code 11140
+// softRateMarkers ограничение скорости/Ключевые слова троттлинга (сравнение в нижнем регистре + сравнение оригинала на китайском, двухканальный).
+// апстрим при коде состояния не 429 также вернет семантику лимитирования (напр. 200 + code 11140
 // "The model provider is rate-limiting requests."、400 + "rate limit"），
-// 此类响应若不识别，账号既不被冷却也不喂熔断，下次请求仍会被选中（issue #28）。
+// Если такой ответ не распознан, аккаунт ни охлаждается, ни триггерит размыкание, при следующем запросе снова будет выбран (issue #28）。
 //
-// 词表按子串匹配，宁缺毋滥：只收录明确指向「请求速率/模型用量被节流」的措辞。
-// 连字符形式（rate-limiting / rate-limited）需单列——Contains 不跨 '-'。
-// "too many" 会命中 "too many tokens" 这类客户端参数错误，代价是该号被软冷却
-// 一个 SoftCooldown（默认 60s）后自愈，远小于漏判限流导致反复选中同一号的代价。
+// Словарь по совпадению подстрок, лучше меньше да лучше: включать только явно указывающее на "скорость запросов/формулировка "потребление модели дросселируется».
+// Дефисная форма (rate-limiting / rate-limited）требуется отдельная колонка —Contains Не пересекает '-'。
+// "too many« будет хит "too many tokens" Такая ошибка параметров клиента стоит мягкого охлаждения аккаунта
+// Один SoftCooldown（По умолчанию 60s）самовосстановление после, значительно меньше цены пропуска лимита с повторным выбором того же номера.
 var softRateMarkers = []string{
 	"rate limit", // rate limit / rate limits / rate limiting
 	"rate-limiting",
 	"rate-limited",
 	"too many requests",
 	"too many",
-	"usage limit", // usage limit reached / model usage limit exceeded（用量节流，非计费余额）
-	"请求过于频繁", "限流",
+	"usage limit", // usage limit reached / model usage limit exceeded（Троттлинг по использованию, не биллинговый баланс)
+	"Слишком частые запросы", "ограничение скорости",
 }
 
 var sessionDeadMarkers = []string{"Offline user session not found", "12153"}
 
-// accountFaultMarkers 账号级授权/配额故障关键词（大小写不敏感子串匹配）。
+// accountFaultMarkers Авторизация на уровне аккаунта/Ключевые слова сбоя квоты (поиск подстроки без учета регистра).
 //
-// 定位：这类错误是**账号本身状态**决定的本机故障，不是请求格式、不是临时限流、
-// 也不是内容误报——继续重试只会反复刷上游风控/配额检查，必须把该账号冷却轮换。
-//   - "request illegal"（code 11140）→ 上游 auth/auth_forbidden，账号级授权风控，
-//     需重新 OAuth 登录才能恢复，短冷却只能阻止继续送死。
-//   - code 14017（"trial not activated" / "The trial version is not yet activated"）→
-//     上游 quota/quota_not_activated，register 未完成的试用未激活账号，同样账号级。
+// локализация: такого рода ошибка — это**Собственный статус аккаунта**детерминированный локальный сбой, не формат запроса, не временный rate-limit,
+// и не ложное срабатывание контента — повторные ретраи лишь триггерят антифрод апстрима/Проверка квоты, необходимо ротировать кулдаун этого аккаунта.
+// - "request illegal"（code 11140）→ апстрим auth/auth_forbidden，Риск-контроль авторизации на уровне аккаунта,
+// требуется повторно OAuth восстановление только после логина, короткий кулдаун лишь не дает дальше слать впустую.
+// - code 14017（"trial not activated" / "The trial version is not yet activated"）→
+// апстрим quota/quota_not_activated，register незавершенный триал/неактивированный аккаунт, также на уровне аккаунта.
 //
-// 注意 11140 **不能**按 code 判定：该 code 也承载模型级限流文案（"The model provider
-// is rate-limiting requests."），那种场景必须保持 ErrSoftRate（下方 softRateMarkers
-// 后判定）。故此处只收 msg 关键词 "request illegal"（auth_forbidden 的真实文案）。
-// 14017 文案唯一（无软限流歧义），可安全收录。
+// Внимание 11140 **нельзя**Нажать code проверка: данный code Также несет текст лимита уровня модели ("The model provider
+// is rate-limiting requests."），в таком сценарии необходимо сохранять ErrSoftRate（ниже softRateMarkers
+// после решения). Поэтому здесь принимаем только msg ключевые слова "request illegal"（auth_forbidden фактический текст).
+// 14017 Текст един (без неоднозначности soft-лимита), можно безопасно индексировать.
 var accountFaultMarkers = []string{
 	"request illegal",
 	"trial not activated",
 	"trial version is not yet activated",
 }
 
-// contentBlockedMarkers 内容策略拦截关键词（大小写不敏感子串匹配）。
+// contentBlockedMarkers ключевые слова блокировки контент-политикой (матчинг подстроки без учёта регистра).
 //
-// 定位：上游按逐字精确指纹审核，system 来源的模板句（如 Claude Code/Codex
-// 注入指令）触发 HTTP 400 + 以下文案。这是「误报」（合法流量被审核误杀），
-// 非账号问题——该账号余额健康、未限流、session 未死，故 ErrContentBlocked
-// 在 applyErrorPolicy 中不罚账号（无冷却/熔断/NoteError），改由网关降级重试。
+// позиционирование: апстрим проверяет по точному посимвольному отпечатку,system Шаблонная фраза источника (напр. Claude Code/Codex
+// инжект-инструкция) триггер HTTP 400 + текст ниже. Это "ложное срабатывание» (валидный трафик ошибочно забракован модерацией),
+// не проблема аккаунта — баланс аккаунта в норме, без лимита,session Не умер, поэтому ErrContentBlocked
+// В applyErrorPolicy не штрафовать аккаунт (без кулдауна/Circuit Breaker/NoteError），переведено на деградирующий ретрай через шлюз.
 var contentBlockedMarkers = []string{
 	"blocked by security policy",
 	"unapproved channel",
 	"illegal api invocation",
 }
 
-// badParamsMarkers 请求体解析失败关键词（issue #41 连带）：HTTP 400 + 上游
-// "Unmarshal chat params failed..."（code 11101）。这是"发给上游的 body 有问题"，
-// 与账号健康无关——不罚号，但仍轮转（commit B）。
+// badParamsMarkers ключевые слова ошибки парсинга тела запроса (issue #41 связка):HTTP 400 + апстрим
+// "Unmarshal chat params failed...«（code 11101）。это«отправляемое в upstream body есть проблема"，
+// Не связано со здоровьем аккаунта — без штрафа, но с ротацией (commit B）。
 var badParamsMarkerMsg = "Unmarshal chat params failed"
 
-// invalidImageMarkers 图片请求格式/数据无效（HTTP 400）的**文案**形态。这类错误由
-// 请求内容决定，不是账号问题：换账号不会改变同一 body 的解析结果。上游常见形态包括
+// invalidImageMarkers формат запроса изображения/данные недействительны (HTTP 400） **текст**форма. Ошибки такого типа вызваны
+// Определяется содержимым запроса, а не проблемой аккаунта: смена аккаунта не изменит то же body результат парсинга. Типичные форматы upstream включают
 // `Parse message failed: invalid image_url content`、invalid_image_data、
 // `replace the image`。
 //
-// 业务码 11135 不放在这里：code 判定必须容忍 JSON 空白（`"code": 11135`），
-// 字面量 marker 只能覆盖紧凑形态，故统一走 codeMarker（见 Classify 的 400 分支，
-// 与 hint.go 的 isInvalidImageData 同口径；上游 5d5223d 的 Copilot review 修复）。
+// бизнес-код 11135 Не размещать здесь:code Решение должно толерировать JSON Пусто (`"code": 11135`），
+// Литерал marker Покрывает только компактную форму, поэтому единый путь через codeMarker（См. Classify 400 ветка,
+// и hint.go isInvalidImageData та же метрика; апстрим 5d5223d Copilot review исправление).
 var invalidImageMarkers = []string{
 	"invalid image_url content",
 	"invalid_image_data",
 	"replace the image",
 }
 
-// 定位：上下文超限是**请求的问题不是账号的问题**——同一个 body 换任何账号发都会
-// 超限，与 WAF fail-fast 同哲学（确定与账号无关的错误不罚号不轮转，白白浪费健康号
-// 的请求配额）。marker 双通道：
-//   - `"code":11115`：业务信封 code 字段（JSON 空格容差；`"code":"11115"` 字符串
-//     形态也命中）；
-//   - "prompt is too long"：msg 文案（大小写不敏感）。
+// Диагностика: превышение контекста — это**проблема запроса — не проблема аккаунта**——тот же body Отправка с любого аккаунта всё равно
+// превышение лимита, и WAF fail-fast Та же философия (ошибки, точно не связанные с аккаунтом, не штрафуют номер и не ротируют, зря тратя здоровые номера
+// квота запросов).marker два канала:
+// - `"code":11115`：бизнес-конверт code Поле (JSON допуск на пробелы;`«code":«11115"` Строка
+// паттерн тоже считается совпадением);
+// - "prompt is too long"：msg Текст (без учета регистра).
 //
-// 只在 400/404/413 请求级状态码上判（429+11115 概率极低且属限流语义优先，
-// 5xx 属服务端故障优先）。误判代价（好 body 被归 prompt_too_long）：不罚号 +
-// 不轮转 + 透传原文，客户端看到上游原文可自行排查，代价可控。
+// Только в 400/404/413 определение по статус-коду на уровне запроса (429+11115 Вероятность крайне низкая, приоритет у семантики rate limit,
+// 5xx считается ошибкой сервера в приоритете). Цена ложного срабатывания (хорошо body Отнесено к prompt_too_long）：аккаунт не штрафуется +
+// без ротации + Проброс оригинала, клиент видит оригинал апстрима и может сам диагностировать, цена контролируема.
 var promptTooLongMarkers = []string{
 	`"code":11115`,
 	`"code": 11115`,
@@ -189,79 +189,79 @@ var promptTooLongMarkers = []string{
 	"prompt is too long",
 }
 
-// isPromptTooLongStatus 11115 只在请求级 4xx 上判（见 promptTooLongMarkers 注释）。
+// isPromptTooLongStatus 11115 только на уровне запроса 4xx проверка выше (см. promptTooLongMarkers комментарий).
 func isPromptTooLongStatus(status int) bool {
 	return status == http.StatusBadRequest || status == http.StatusNotFound ||
 		status == http.StatusRequestEntityTooLarge
 }
 
-// alreadyCheckinMarkers "今天已签到"关键词（上游对重复签到返回 code!=0，
-// 实测 code=10001/14001 "今天已签到"/"今日已签到"）。只对 *Error.Msg 做包含匹配，
-// 网络层/解析层错误不在此识别（见 IsAlreadyCheckin）。
-var alreadyCheckinMarkers = []string{"已签到", "already"}
+// alreadyCheckinMarkers "Сегодня уже отмечено"ключевое слово (upstream при повторном check-in возвращает code!=0，
+// На практике code=10001/14001 "Сегодня уже отмечено«/«Сегодня уже отмечено"）。Только для *Error.Msg делать contains-совпадение,
+// Сетевой уровень/Ошибки уровня парсинга здесь не распознаются (см. IsAlreadyCheckin）。
+var alreadyCheckinMarkers = []string{"今日已签到", "Уже отмечено", "already"}
 var badParamsMarkerCode = `"code":11101`
 
-// softRateResetLoc 上游 429 6004 文案中的重置时间固定按 UTC+8 解释（上游文案如此，
-// 与容器时区无关）。
+// softRateResetLoc апстрим 429 6004 Время сброса в тексте фиксированно по UTC+8 Пояснение (текст апстрима такой,
+// не зависит от часового пояса контейнера).
 var softRateResetLoc = time.FixedZone("UTC+8", 8*60*60)
 
-// SoftRateResetLoc 暴露重置时间的固定时区（供测试构造/断言同一时区口径）。
+// SoftRateResetLoc фиксированный часовой пояс времени сброса (для конструирования теста/assert единая метрика часового пояса).
 func SoftRateResetLoc() *time.Location { return softRateResetLoc }
 
-// modelRateLimitCode 明确指向「模型级 429 限流」的业务 code。
-// 上游用它表达"该模型的使用量超限"（code 6004，msg 带「将在 … 重置」），
-// 而不是账号整体被限流——账号健康，只是这个模型此刻被限（issue #31）。
+// modelRateLimitCode явно указывает на "уровень модели 429 бизнес-логика "rate limit» code。
+// Апстрим использует это для выражения"Превышен лимит использования этой модели"（code 6004，msg содержит "будет через … сброс»),
+// а не весь аккаунт в rate limit — аккаунт здоров, ограничена только эта модель (issue #31）。
 const modelRateLimitCode = "6004"
 
-// softRateResetPatternCN/EN 匹配重置文案（CN「将在 … 重置」/ global 域英文
-// "reset at <固定格式时间>"），捕获中间的时间串。
+// softRateResetPatternCN/EN Текст сброса при совпадении (CN「Будет … сброс»/ global Английское имя домена
+// "reset at <время в фиксированном формате>"），захватить временную строку посередине.
 const softRateResetPatternCN = `将在 (.+?) 重置`
 const softRateResetPatternEN = `(?i)reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`
 
-// 限流判定正则预编译为包级 var：IsModelRateLimit / ParseRateReset 在每次错误
-// 分类、每个限流 body 上调用，函数体内 MustCompile 是纯浪费；错误风暴（429
-// 轰炸）时尤甚。模式串均为纯常量。regexp 并发安全（匹配只读），无需额外锁。
+// Регулярка для rate limit прекомпилируется на уровне пакета var：IsModelRateLimit / ParseRateReset При каждой ошибке
+// классификация, каждый лимит body вызов на, внутри тела функции MustCompile — чистые потери; шторм ошибок (429
+// особенно при флуде). Шаблоны — только константы.regexp потокобезопасно (сопоставление только для чтения), доп. блокировка не требуется.
 var (
-	reModelRateLimit  = regexp.MustCompile(`"code"\s*:\s*"?` + modelRateLimitCode + `"?`)
+	reModelRateLimit = regexp.MustCompile(`"code"\s*:\s*"?` + modelRateLimitCode + `"?`)
 	reSoftRateResetCN = regexp.MustCompile(softRateResetPatternCN)
 	reSoftRateResetEN = regexp.MustCompile(softRateResetPatternEN)
 )
 
-// softRateTimeLayout 上游重置时间的格式（无时区后缀；时区固定 UTC+8）。
+// softRateTimeLayout Формат времени сброса апстрима (без суффикса часового пояса; часовой пояс фиксирован UTC+8）。
 const softRateTimeLayout = "2006-01-02 15:04:05"
 
-// IsModelRateLimit 报告 429 body 是否明确指向模型级限流（业务 code 6004）。
-// 用于区分"账号级软限流"（按账号冷却）与"模型级用量限流"（切模型即可用）。
+// IsModelRateLimit отчет 429 body указывает ли явно на лимит уровня модели (бизнес code 6004）。
+// Для различения"Soft-лимит уровня аккаунта«（охлаждение по аккаунту) и«лимит использования на уровне модели"（смена модели — сразу доступно).
 func IsModelRateLimit(body string) bool {
-	// `"code":6004` / `"code": 6004` / `"code":"6004"` 均可命中（JSON 空格容差）。
+	// `"code":6004` / `«code": 6004` / `«code":«6004"` оба могут сработать (JSON допуск по пробелам).
 	return reModelRateLimit.MatchString(body)
 }
 
-// modelBlockCode 明确指向「该后端无此模型」的业务 code。
+// modelBlockCode бизнес-ошибка, явно указывающая "у данного бэкенда нет такой модели» code。
 const modelBlockCode = "11102"
 
-// modelBlockMsgMarker 11102 答复的确定性文案（官方 error message 固定短语）。
-// 只收这个窄短语，不收 "model ... not found" 宽正则——后者会误伤其他业务的
-// not found 措辞。
+// modelBlockMsgMarker 11102 Детерминированный текст ответа (официальный error message фиксированная фраза).
+// Принимать только эту узкую фразу, не принимать "model ... not found" Широкий regex — последний заденет
+// not found Формулировка.
 const modelBlockMsgMarker = "service info not found"
 
-// ModelBlockReason 11102 负缓存条目在 pool.modelCooldowns 里的 reason 前缀。
-// handler 写 BlockModelBackoff；pool.BlockModelClear 按 "11102" 前缀识别条目
-// （与 6004 条目的 "6004 model rate limit" reason 互不干扰）。
+// ModelBlockReason 11102 Запись negative cache в pool.modelCooldowns внутри reason Префикс.
+// handler Запись BlockModelBackoff；pool.BlockModelClear Нажать "11102" Запись идентификации по префиксу
+// （и 6004 элемента "6004 model rate limit" reason не мешают друг другу).
 const ModelBlockReason = "11102 model not available"
 
-// IsModelBlocked 报告 body 是否是「该后端无此模型」(11102) 的确定性答复。
+// IsModelBlocked отчет body является ли "у данного бэкенда нет этой модели»(11102) детерминированный ответ.
 //
-// 只比对 code/msg 等独立字段，绝不做整段文本子串匹配：错误体还带 requestId 等字段，
-// 拿整段文本匹配会把 "11102" 撞在 ID 上、误避让一个本来能用的模型。判定 =
-// code 字段精确等于 "11102"，或 msg/message 字段命中窄短语 "service info not
-// found"（两者任一命中即真）。只看 400/404：429 带 11102 属限流语义。
-// 字段遍历覆盖顶层与 error 子对象两层。
+// Сравнивать только code/msg как отдельные поля, никогда не делать подстроковый поиск по всему тексту: тело ошибки также содержит requestId и т.п. поля,
+// Матчинг по всему тексту приведет к тому, что "11102" попадание в ID иначе ошибочно обойти доступную модель. Решение =
+// code поле строго равно "11102«，Или msg/message Поле совпало с узкой фразой "service info not
+// found"（истинно при срабатывании любого из двух). Смотреть только 400/404：429 Лента 11102 относится к семантике лимитирования.
+// Обход полей покрывает верхний уровень и error Вложенный объект — два уровня.
 func IsModelBlocked(status int, body string) bool {
 	if (status != http.StatusBadRequest && status != http.StatusNotFound) || body == "" {
 		return false
 	}
-	// 轻量预检：body 既无 "11102" 又无 marker 时直接短路（大多数 4xx 零分配返回）。
+	// Лёгкая предпроверка:body нет ни "11102« и нет marker при этом сразу закорачивается (большинство 4xx возврат без аллокаций).
 	if !strings.Contains(body, modelBlockCode) && !strings.Contains(strings.ToLower(body), modelBlockMsgMarker) {
 		return false
 	}
@@ -293,7 +293,7 @@ func IsModelBlocked(status int, body string) bool {
 }
 
 // hasBusinessCode reports whether a JSON error envelope contains an exact
-// business code in a field named "code". Upstream envelopes vary between
+// business code in a field named "code«. Upstream envelopes vary between
 // top-level and nested error/data objects, so walk the decoded structure.
 func hasBusinessCode(body, want string) bool {
 	var root any
@@ -324,38 +324,38 @@ func hasBusinessCode(body, want string) bool {
 	return walk(root)
 }
 
-// hasBusinessEnvelope 报告错误 body 是否携带上游业务信封形态（JSON 且含
-// `"code":` 或 `"msg":` 字段）。WAF 403 判定（IsWafBlocked）用「无业务信封」
-// 区分 APISIX WAF 拦截页（HTML/空体/纯文本）与上游业务层 403（带 code/msg
-// 信封，正常走既有分类）。JSON 解析不做：信封存在性只需字段名命中——
-// 畸形 JSON 但含 `"msg":` 字样仍按业务响应保守处理（宁漏判 WAF 也不误罚
-// 业务 403，后者有各自的权威分类）。
+// hasBusinessEnvelope Сообщить об ошибке body наличие формы бизнес-конверта апстрима (JSON И содержит
+// `"code«:` Или `«msg»:` поле).WAF 403 оценка (IsWafBlocked）Использовать "пустой бизнес-конверт»
+// Различение APISIX WAF Страница блокировки (HTML/Пустое тело/plain text) и бизнес-слоем апстрима 403（Лента code/msg
+// конверт, идёт по существующей классификации).JSON парсинг не делается: для наличия конверта достаточно совпадения имени поля —
+// битый JSON но содержит `"msg":` строка по-прежнему обрабатывается консервативно как бизнес-ответ (лучше пропустить WAF и без ложного штрафа
+// Бизнес 403，последние имеют собственную авторитетную классификацию).
 func hasBusinessEnvelope(body string) bool {
 	return strings.Contains(body, `"code":`) || strings.Contains(body, `"msg":`)
 }
 
-// IsWafBlocked 报告 403 响应是否为 WAF 拦截形态：HTTP 403 且 body 无业务信封
-// （无 `"code":`/`"msg":` JSON 字段——HTML 拦截页、空体、纯文本均命中）。
-// 带业务信封的 403（11140 request illegal / 11128 等）仍走既有分类链。
-// 403 含 accountFault 文案的维持现状（ErrAccountFault），由 Classify 的规则序保证。
+// IsWafBlocked отчет 403 Является ли ответ WAF форма перехвата:HTTP 403 И body Без бизнес-обёртки
+// （отсутствует `"code":`/`«msg":` JSON Поле —HTML Страница блокировки, пустое тело, plain text — все считается срабатыванием).
+// с бизнес-конвертом 403（11140 request illegal / 11128 и т.д.) всё равно идёт по существующей цепочке классификации.
+// 403 Содержит accountFault сохранение текущего текста (ErrAccountFault），От Classify гарантия порядка правил.
 func IsWafBlocked(status int, body string) bool {
 	return status == http.StatusForbidden && !hasBusinessEnvelope(body)
 }
 
-// retryAfterHeaderCandidates 冷却时长优先解析的响应头候选序列：
-// retry-after（秒，RFC 7231）/ retry-after-ms（毫秒）/ x-ratelimit-reset
-// （epoch 秒或毫秒，取 now+ 剩余量）。大小写不敏感（http.Header.Get 已归一）。
+// retryAfterHeaderCandidates Приоритетная последовательность заголовков ответа для парсинга длительности кулдауна:
+// retry-after（с,RFC 7231）/ retry-after-ms（мс)/ x-ratelimit-reset
+// （epoch секунды или миллисекунды, брать now+ остаток). Без учёта регистра (http.Header.Get уже нормализовано).
 var retryAfterHeaderCandidates = []string{"Retry-After", "Retry-After-Ms", "X-Ratelimit-Reset"}
 
-// retryAfterSanity 解析结果的上限（超过视为上游异常值丢弃，回落本地计算），
-// 与 pool 的 softRateMax 默认 2h 同量级。
+// retryAfterSanity верхний предел результата парсинга (превышение считается аномалией апстрима и отбрасывается, откат к локальному расчёту),
+// и pool softRateMax По умолчанию 2h Тот же порядок.
 const retryAfterSanity = 2 * time.Hour
 
-// ParseRetryAfter 从限流/拦截响应头解析上游明示的等待时长：
-// 依次尝试 Retry-After（整数秒）→ retry-after-ms（整数毫秒）→
-// x-ratelimit-reset（纯数字按 epoch 秒/毫秒推断；HTTP-Date 形态不支持——
-// 上游族实践发的是数字）。任一头缺失/非法/非正/超上限则尝试下一头；
-// 全部不可用返回 false（调用方回落既有计算值，绝不臆造等待时长）。
+// ParseRetryAfter из лимитера/перехват заголовков ответа, парсинг явно указанного апстримом времени ожидания:
+// последовательно пробовать Retry-After（целых секунд)→ retry-after-ms（целых мс)→
+// x-ratelimit-reset（чисто числовой по epoch с/вывод в миллисекундах;HTTP-Date Форма не поддерживается —
+// на практике апстрим шлет число). Отсутствие любого заголовка/Недопустимый/неположительный/При превышении лимита пробовать следующий хед;
+// если всё недоступно — вернуть false（вызывающая сторона откатывается к имеющемуся расчётному значению, ни в коем случае не выдумывать время ожидания).
 func ParseRetryAfter(h http.Header) (time.Duration, bool) {
 	for _, name := range retryAfterHeaderCandidates {
 		v := strings.TrimSpace(h.Get(name))
@@ -363,21 +363,21 @@ func ParseRetryAfter(h http.Header) (time.Duration, bool) {
 			continue
 		}
 		if !isAllDigits(v) {
-			continue // 非纯数字（如 HTTP-Date）不解析，宁缺毋滥
+			continue // Не только цифры (напр. HTTP-Date）не парсить, лучше пропустить
 		}
 		n, ok := parseRetryNumber(v, name)
 		if !ok {
 			continue
 		}
 		if n <= 0 || n > retryAfterSanity {
-			continue // 非正/异常大：丢弃（回落本地计算）
+			continue // неположительный/Аномально большое: отбросить (фолбэк на локальный расчет)
 		}
 		return n, true
 	}
 	return 0, false
 }
 
-// isAllDigits 报告 s 是否为纯数字（前置快筛，免 strconv 之后再判语义）。
+// isAllDigits отчет s Является ли чисто числовым (предв. быстрый скрининг, без strconv после — проверка семантики).
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
@@ -390,12 +390,12 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// parseRetryNumber 按头名口径把纯数字串折算成时长。x-ratelimit-reset 是
-// epoch 时刻而非时长：秒口径（10 位）与毫秒口径（13 位）都按「now+ 该时刻
-// 的剩余量」折算，已在过去则不可用。位数不足（8 位以下）无法判定 epoch
-// 语义的丢弃（宁缺毋滥：短串多半是序号之类的误用头）。
+// parseRetryNumber Пересчитать чисто числовую строку в длительность по метрике первого места.x-ratelimit-reset Да
+// epoch Момент времени, а не длительность: в секундах (10 бит) и миллисекундная размерность (13 бит) всё по "now+ в этот момент
+// пересчет по "остатку», если в прошлом — недоступно. Недостаточно разрядов (8 бит и ниже) невозможно определить epoch
+// Семантическое отбрасывание (лучше недобрать: короткие строки чаще ошибочные заголовки вроде порядковых номеров).
 func parseRetryNumber(v, headerName string) (time.Duration, bool) {
-	// 上限 16 位防 int64 溢出（超过 epoch 毫秒的现实量级必非法）。
+	// Верхний лимит 16 битовая защита int64 Переполнение (превышение epoch реалистичный порядок миллисекунд заведомо невалиден).
 	if len(v) > 16 {
 		return 0, false
 	}
@@ -405,8 +405,8 @@ func parseRetryNumber(v, headerName string) (time.Duration, bool) {
 	}
 	switch headerName {
 	case "Retry-After":
-		// 先做上限校验再乘 time.Second：16 位数字乘 1e9 会溢出 int64 回绕成
-		// 小正数，进而通过调用方的 retryAfterSanity 校验被当作合法等待时长。
+		// Сначала проверка лимита, затем умножение time.Second：16 -значное число × 1e9 будет переполнение int64 заворачивается в
+		// малое положительное число, далее через вызов retryAfterSanity валидация считается валидным временем ожидания.
 		if n > int64(retryAfterSanity/time.Second) {
 			return 0, false
 		}
@@ -416,9 +416,9 @@ func parseRetryNumber(v, headerName string) (time.Duration, bool) {
 			return 0, false
 		}
 		return time.Duration(n) * time.Millisecond, true
-	default: // X-Ratelimit-Reset：epoch → 剩余量
+	default: // X-Ratelimit-Reset：epoch → остаток
 		sec := n
-		if len(v) >= 12 { // 毫秒口径（13 位）；11 位边界按秒（误判代价是多算 1000 倍）
+		if len(v) >= 12 { // В миллисекундах (13 бит);11 Граница по секундам (цена ложного срабатывания — лишний подсчёт 1000 раз)
 			sec = n / 1000
 		}
 		remain := time.Until(time.Unix(sec, 0))
@@ -426,17 +426,17 @@ func parseRetryNumber(v, headerName string) (time.Duration, bool) {
 	}
 }
 
-// ParseRateReset 从任何限流响应 body 里统一解析「将在 … 重置」时间（上游 UTC+8 文案）。
-// 成功返回解析出的**墙钟时刻**（按 UTC+8 解释），失败返回零值 + false。
+// ParseRateReset из любого ответа rate-limit body внутри единый парсинг "через … время "сброса» (апстрим UTC+8 текст).
+// При успехе вернуть распарсенное**Время по wall-clock**（Нажать UTC+8 пояснение), при ошибке вернуть ноль + false。
 //
-// 是否走模型级豁免、时日对齐到 until 还是 modelCooldowns，由冷却决策侧（pool）按
-// IsModelRateLimit 判定，本函数只负责「把上游明说的恢复时刻抽出来」。没有时间文案
-// 的限流也照常由调用方退回有界退避（绝不臆造时间）。
+// идти ли через exemption на уровне модели, выравнивание даты/времени на until или modelCooldowns，Стороной решения о кулдауне (pool）Нажать
+// IsModelRateLimit решение: эта функция отвечает только за "извлечение явно указанного апстримом момента восстановления». Текста со временем нет
+// лимит также возвращается вызывающему как ограниченный бэкофф (время не выдумывать).
 func ParseRateReset(body string) (time.Time, bool) {
-	// CN 文案优先；global 域 429 body 是英文形态（"will reset at YYYY-MM-DD HH:MM:SS
-	// UTC+8"），此前只认中文 → global 限流解析不到恢复时刻，退回有界退避基数反复
-	// 翻倍（修「global 域冷却指数翻倍」）。英文正则锚定固定格式时间，自然语言
-	// （"reset at the end of the day"）不匹配。
+	// CN Приоритет текста;global Домен 429 body в английской форме ("will reset at YYYY-MM-DD HH:MM:SS
+	// UTC+8"），ранее распознавался только китайский → global Не удалось распарсить момент восстановления при лимитировании, откат к ограниченному базовому бэкоффу с повтором
+	// удвоение (испр. "global удвоение экспоненты кулдауна домена"). англ. regex якорит время фиксированного формата, естественный язык
+	// （"reset at the end of the day"）Несовпадение.
 	m := reSoftRateResetCN.FindStringSubmatch(body)
 	if len(m) < 2 {
 		m = reSoftRateResetEN.FindStringSubmatch(body)
@@ -445,7 +445,7 @@ func ParseRateReset(body string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	ts := strings.TrimSpace(m[1])
-	ts = strings.TrimSuffix(ts, " UTC+8") // 去掉后缀，固定按 softRateResetLoc 解释
+	ts = strings.TrimSuffix(ts, " UTC+8") // убрать суффикс, фиксированно по softRateResetLoc Пояснение
 	t, err := time.ParseInLocation(softRateTimeLayout, ts, softRateResetLoc)
 	if err != nil {
 		return time.Time{}, false
@@ -453,55 +453,55 @@ func ParseRateReset(body string) (time.Time, bool) {
 	return t, true
 }
 
-// Classify 按 HTTP 状态码 + body 判定错误类别。
+// Classify Нажать HTTP Код состояния + body определить категорию ошибки.
 //
-// 判定顺序自「严」到「宽」，每层的先后都有语义依据：
-//  0. 11102（IsModelBlocked）——「该后端无此模型」确定性答复，语义最具体，最先判
-//     （只认 400/404，429+11102 属限流语义走第 4 层）。
-//  1. 402 —— 真正的计费余额耗尽状态码，最严、最不可自愈，最先判。
-//  2. sessionDeadMarkers —— 需要人工重登的终态。若 401 body 同时含 "12153" 与
-//     "rate limit"（如网关错误页混排），归 session_dead：短冷却救不活失效 session，
-//     误判为限流会让该死号留在池中反复被选中；且此层 marker 是精确词（12153 等），
-//     比限流层的大范围子串更具体，具体优先于宽泛。
-//  3. accountFaultMarkers —— 账号级授权/配额故障（11140 request illegal auth 风控、
-//     14017 trial not activated register 未完成）。必须先于 status==429 判定：
-//     14017 常带 429 状态码，若落到 status==429 会误归 soft_rate（"限流"语义不符：
-//     限流可指数退避等自愈，账号级故障等不来）。11140 的 model 级限流变体
-//     （rate-limiting 文案）因 marker 不含该文案而天然落到 softRateMarkers 层，
-//     不受影响。
-//  4. 429 + code 14018 —— 明确的账号积分耗尽，归 ErrHardCredit（issue #175）。
-//     只认结构化业务码，不靠可能跨计费/限流两界的文案猜测。
-//  5. status==429 —— 限流状态码兜底（先于 hardMarkers）：429 body 高频携带
-//     "quota exceeded"/"额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把
-//     限流误归 ErrHardCredit 硬冷却到次日 04:00，白扔号约 12h。状态码是比关键词
-//     更权威的信号；真正的余额耗尽由 402（第 1 层）或 14018（第 4 层）捕获，
-//     非 429 状态码的 quota 措辞仍走下方 hardMarkers（第 6 层）。
-//  6. hardMarkers —— 非 429 响应携带计费关键词（200 业务信封 / 403 信封等）。
-//  7. softRateMarkers —— 非 429 状态码携带限流文案（issue #28 修复点）。
-//     位于此处可覆盖 200/400/403/5xx 各状态码。
-//  8. 11115 —— 「prompt is too long」请求级语义：判在 404/5xx 与通用 4xx 兜底
-//     之前（404 上打 11115 若落 ErrNotFound 会误冷却账号——上下文超限与账号无关）。
-//  9. 404 / 5xx —— 与限流无关的常规分类。
-//  10. IsWafBlocked —— 403 且无业务信封（HTML 拦截页/空体/纯文本）：APISIX WAF
-//     拦截形态。判在通用 4xx 兜底**之前**：此前该形态落 ErrClient → 只换号不罚 →
-//     连环 403。带业务信封的 403 已被上方各层捕获，走不到本层。
-//  11. 内容策略/参数错误/其他 4xx —— 通用兜底。
+// Порядок проверки от "строгого» к "широкому», порядок каждого уровня семантически обоснован:
+// 0. 11102（IsModelBlocked）——「«У этого бэкенда нет такой модели» — детерминированный ответ, семантически наиболее конкретный, проверяется первым
+// （Принимается только 400/404，429+11102 семантика лимитирования — по п. 4 уровень).
+// 1. 402 —— Истинный код исчерпания биллингового баланса — самый строгий, несамовосстанавливающийся, проверяется первым.
+// 2. sessionDeadMarkers —— терминальное состояние, требующее ручного перелогина. Если 401 body одновременно содержит "12153" и
+// "rate limit"（например примесь страниц ошибок шлюза), отнести к session_dead：Короткий кулдаун не спасает от фейла session，
+// Ложная классификация как лимит оставит мертвый аккаунт в пуле с повторным выбором; и этот слой marker — точный термин (12153 и т.д.),
+// Более специфично, чем широкая подстрока уровня rate-limit, специфичное приоритетнее общего.
+// 3. accountFaultMarkers —— Авторизация на уровне аккаунта/Сбой квоты (11140 request illegal auth риск-контроль,
+// 14017 trial not activated register не завершено). Должен быть до status==429 Критерий:
+// 14017 часто содержит 429 Код статуса, если попадает в status==429 будет ошибочно отнесено к soft_rate（"ограничение скорости"Несоответствие семантики:
+// троттлинг самовосстанавливается экспоненциальным бэкоффом и т.п., сбои уровня аккаунта и т.д. не приходят).11140 model вариант лимитирования уровня
+// （rate-limiting текст) из-за marker Без этого текста автоматически попадает в softRateMarkers слой,
+// не затрагивается.
+// 4. 429 + code 14018 —— явное исчерпание баллов аккаунта, относится к ErrHardCredit（issue #175）。
+// учитывать только структурированный бизнес-код, без опоры на возможный кросс-биллинг/догадки по текстам на границах лимитов.
+// 5. status==429 —— Фолбэк по статус-коду rate limit (перед hardMarkers）：429 body частая передача
+// "quota exceeded«/«Недостаточно лимита" и т.п. кросс-биллинг/формулировка двух границ лимита,hardMarkers предварительная проверка превратит
+// ошибочное отнесение к rate limit ErrHardCredit Жёсткое охлаждение до следующего дня 04:00，впустую потеряно аккаунтов около 12h。Статус-код приоритетнее ключевых слов
+// Более авторитетный сигнал; реальное исчерпание баланса определяется 402（№ 1 уровень) или 14018（№ 4 слой) перехват,
+// не 429 кода статуса quota формулировка — см. ниже hardMarkers（№ 6 уровень).
+// 6. hardMarkers —— не 429 Ответ содержит ключевые слова биллинга (200 бизнес-конверт / 403 конверт и т.д.).
+// 7. softRateMarkers —— не 429 статус-код несет текст лимитирования (issue #28 точка исправления).
+// Находясь здесь, может переопределить 200/400/403/5xx все статус-коды.
+// 8. 11115 —— 「prompt is too long」Семантика на уровне запроса: проверка в 404/5xx С общим 4xx Фолбэк
+// до (404 пометка выше 11115 если попадет ErrNotFound приведёт к ошибочному охлаждению аккаунта — превышение контекста не связано с аккаунтом).
+// 9. 404 / 5xx —— Обычная классификация, не связанная с ограничением частоты.
+// 10. IsWafBlocked —— 403 и без бизнес-конверта (HTML Страница перехвата/Пустое тело/чистый текст):APISIX WAF
+// форма перехвата. Проверка в общем 4xx Фолбэк**До**：Ранее эта форма попадала ErrClient → Только смена аккаунта без штрафа →
+// Каскадный 403。с бизнес-конвертом 403 уже перехвачено верхними слоями, до этого слоя не доходит.
+// 11. Стратегия контента/ошибка параметра/прочее 4xx —— Универсальный фолбэк.
 func Classify(status int, body string) ErrKind {
-	// 11102「该后端无此模型」须最先判：它是「模型在后端不存在」的确定性答复，语义比
-	// 计费/限流都更具体——若不先判，msg 里的 "service info not found" 会被更宽的
-	// 4xx 兜底归为 ErrClient（只换号不避让），该坏号会留在池内反复被选中。
-	// 只认 400/404（见 IsModelBlocked），429+11102 落下方 status==429 层走限流语义。
+	// 11102「"Модель отсутствует на данном бэкенде« проверять первым: это детерминированный ответ "модель не существует на бэкенде", семантика выше
+	// Биллинг/Лимит более специфичен — если не проверить сначала,msg внутри "service info not found" Будет перекрыто более широким
+	// 4xx Фолбэк отнести к ErrClient（только смена номера без уклонения), этот битый номер останется в пуле и будет выбираться повторно.
+	// Принимается только 400/404（См. IsModelBlocked），429+11102 внизу status==429 Уровень использует семантику лимитирования.
 	if IsModelBlocked(status, body) {
 		return ErrModelBlocked
 	}
-	// 402：真正的计费余额耗尽状态码，最严、最不可自愈，最先判。
+	// 402：Истинный код исчерпания биллингового баланса — самый строгий, несамовосстанавливающийся, проверяется первым.
 	if status == http.StatusPaymentRequired {
 		return ErrHardCredit
 	}
 	lower := strings.ToLower(body)
-	// sessionDead / accountFault 先于 status==429：账号级终态等不来自愈，限流状态码
-	// 不得掩盖它们（429+14017 必须 accountFault，401+12153 混排 "rate limit" 必须
-	// sessionDead——此层 marker 是精确词，比限流层的大范围子串更具体，具体优先于宽泛）。
+	// sessionDead / accountFault До status==429：Терминальные состояния уровня аккаунта и т.п. не самовосстанавливаются, коды rate limit
+	// нельзя их маскировать (429+14017 Обязательно accountFault，401+12153 микширование "rate limit" Обязательно
+	// sessionDead——этот слой marker — точное слово, конкретнее широкой подстроки уровня rate-limit, конкретное приоритетнее общего).
 	for _, m := range sessionDeadMarkers {
 		if strings.Contains(body, m) {
 			return ErrSessionDead
@@ -512,18 +512,18 @@ func Classify(status int, body string) ErrKind {
 			return ErrAccountFault
 		}
 	}
-	// 14018 是明确的账号积分耗尽业务码。它必须先于通用 429 兜底，否则会被误判为
-	// 可自愈的软限流并在全池冷却时反复兜底选中（issue #175）。仅按结构化 code
-	// 判定；无该 code 的 "credits exhausted" 文案仍保持普通 429 的软限流语义。
+	// 14018 Это явный бизнес-код исчерпания баллов аккаунта. Должен проверяться до общего 429 фолбэк, иначе будет ошибочно принято за
+	// Самовосстанавливающийся soft-лимит с fallback-выбором при охлаждении всего пула (issue #175）。только по структурированным code
+	// Проверка; без этого code "credits exhausted" Текст остаётся обычным 429 семантика мягкого rate limit.
 	if status == http.StatusTooManyRequests && hasBusinessCode(body, "14018") {
 		return ErrHardCredit
 	}
-	// status==429 先于 hardMarkers：限流响应 body 高频携带 "quota exceeded"/
-	// "额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把限流误归
-	// ErrHardCredit 硬冷却到次日 04:00，白扔号约 12h。状态码是比关键词更权威的
-	// 信号：上游既然给了 429，就按限流语义处理（宁可短冷却自愈，不可长冷却弃号）；
-	// 真正的余额耗尽由 402（上层）或 14018（上层）捕获，非 429 状态码的 quota
-	// 措辞仍走下方 hardMarkers（历史语义不变）。
+	// status==429 До hardMarkers：Ответ rate limit body частая передача "quota exceeded"/
+	// "Недостаточно лимита" и т.п. кросс-биллинг/формулировка двух границ лимита,hardMarkers предварительная проверка ошибочно отнесет rate limit к
+	// ErrHardCredit Жёсткое охлаждение до следующего дня 04:00，впустую потеряно аккаунтов около 12h。статус-код авторитетнее ключевых слов
+	// Сигнал: раз апстрим отдал 429，обрабатывать по семантике rate limit (лучше короткий cooldown с самовосстановлением, чем долгий с отбраковкой аккаунта);
+	// реальное исчерпание баланса от 402（верхний уровень) или 14018（верхний уровень) перехватывает, не 429 кода статуса quota
+	// формулировка — см. ниже hardMarkers（историческая семантика неизменна).
 	if status == http.StatusTooManyRequests {
 		return ErrSoftRate
 	}
@@ -537,9 +537,9 @@ func Classify(status int, body string) ErrKind {
 			return ErrSoftRate
 		}
 	}
-	// 11115「prompt is too long」：判在 404/5xx/WAF/内容策略/参数错误/通用 4xx
-	// 之前——请求级语义最具体（上下文超限），须先于宽泛的状态码兜底（404 兜底会
-	// 误归 ErrNotFound 只冷却不透传；ErrClient 只换号，浪费健康号配额）。
+	// 11115「prompt is too long」：считать находящимся в 404/5xx/WAF/Стратегия контента/ошибка параметра/общий 4xx
+	// ранее — семантика уровня запроса наиболее специфична (превышение контекста), должна предшествовать общему fallback по статус-коду (404 фолбэк будет
+	// Ошибочное отнесение ErrNotFound только кулдаун без проксирования;ErrClient только смена аккаунта, трата квоты здоровых аккаунтов).
 	if isPromptTooLongStatus(status) {
 		for _, m := range promptTooLongMarkers {
 			if strings.Contains(body, m) || (m != strings.ToLower(m) && strings.Contains(lower, strings.ToLower(m))) {
@@ -553,16 +553,16 @@ func Classify(status int, body string) ErrKind {
 	if status >= 500 {
 		return ErrServer
 	}
-	// WAF 403（无业务信封的拦截形态）：判在内容策略/参数错误/通用 4xx 之前——
-	// 这些层只认带文案的 body，WAF 空体/HTML 永远不会命中它们的 marker，
-	// 但落 ErrClient 兜底的代价是「只换号不罚」（连环 403 根因），必须在兜底前分流。
-	// 带信封的 403 在上方各层已有权威分类，不受影响。
+	// WAF 403（форма блокировки без бизнес-конверта): относить к контент-политике/ошибка параметра/общий 4xx до —
+	// эти слои принимают только с текстом body，WAF Пустое тело/HTML Никогда не попадут в них marker，
+	// но попадает ErrClient цена фолбэка — "только смена аккаунта без штрафа» (серия 403 корневая причина), необходимо развести до fallback.
+	// С конвертом 403 на вышестоящих уровнях уже есть авторитетная классификация, не затрагивается.
 	if IsWafBlocked(status, body) {
 		return ErrWafBlock
 	}
-	// 图片格式/数据错误是确定性的请求级错误：同 body 换账号结果不变，直接
-	// fail-fast，避免把健康账号轮转一遍后仍把最终 503 返回给客户端。
-	// 11135 业务码走 codeMarker（JSON 空白容差），文案走 invalidImageMarkers。
+	// формат изображения/Ошибка данных — детерминированная ошибка уровня запроса: тот же body Смена аккаунта не меняет результат, сразу
+	// fail-fast，чтобы не перебирать все здоровые аккаунты и всё равно в итоге 503 Вернуть клиенту.
+	// 11135 Бизнес-код идёт через codeMarker（JSON допуск по пробелам), текст через invalidImageMarkers。
 	if status == http.StatusBadRequest && codeMarker(lower, "11135") {
 		return ErrImageInvalid
 	}
@@ -573,135 +573,135 @@ func Classify(status int, body string) ErrKind {
 			}
 		}
 	}
-	// 内容策略拦截（HTTP 400 + 审核文案）：判在通用 ErrClient 之前。
-	// 这是误报信号，不罚账号，由网关降级重试处理（见 handler.applyErrorPolicy）。
+	// Блокировка контент-политикой (HTTP 400 + текст на модерацию): считается в общем ErrClient ранее.
+	// Это ложный сигнал, аккаунт не штрафуется, обрабатывается деградацией и ретраем шлюза (см. handler.applyErrorPolicy）。
 	if status >= 400 {
 		for _, m := range contentBlockedMarkers {
 			if strings.Contains(lower, m) {
 				return ErrContentBlocked
 			}
 		}
-		// 请求体解析失败（HTTP 400 + Unmarshal chat params failed / code 11101）：
-		// 这是"发给上游的 body 有问题"。网关侧截断已由 413 消灭（issue #41 commit A），
-		// 剩余来源是客户端 JSON 本身畸形——换了账号照样 400，不该罚号（白白冷却好号）。
-		// 归 ErrBadParams：不冷却/不熔断/不计错，但**仍然轮转**（不同账号可能有不同的
-		// 模型权限，值得再试一次）。
+		// Ошибка парсинга тела запроса (HTTP 400 + Unmarshal chat params failed / code 11101）：
+		// это"отправляемое в upstream body есть проблема"。Усечение на стороне шлюза уже 413 Устранить (issue #41 commit A），
+		// оставшийся источник — клиент JSON Сам по себе некорректен — смена аккаунта не поможет 400，не следует штрафовать номер (зря охлаждать хороший номер).
+		// Возврат ErrBadParams：Без охлаждения/БезОтключение/ошибка не засчитывается, но**все равно ротируется**（У разных аккаунтов могут быть разные
+		// права модели, стоит повторить попытку).
 		if strings.Contains(body, badParamsMarkerMsg) || strings.Contains(body, badParamsMarkerCode) {
 			return ErrBadParams
 		}
 		return ErrClient
 	}
-	// HTTP 200 但业务 code 非 0 且含余额关键词的情况已被上面 hardMarkers 捕获。
+	// HTTP 200 Но бизнес code не 0 случаи с ключевыми словами баланса уже обработаны выше hardMarkers перехват.
 	return ErrNone
 }
 
-// apiEnvelope 上游统一信封。
+// apiEnvelope Унифицированный конверт upstream.
 type apiEnvelope struct {
-	Code int             `json:"code"`
-	Msg  string          `json:"msg"`
+	Code int `json:"code"`
+	Msg string `json:"msg"`
 	Data json.RawMessage `json:"data"`
 }
 
-// Client 上游 HTTP 客户端。Base 字段可覆盖便于测试。
+// Client апстрим HTTP Клиент.Base Поле переопределяемо для тестов.
 type Client struct {
 	HTTP *http.Client
 
-	// ChatHTTP 聊天 SSE 专用 client：无总时长上限（Timeout=0），首字节由
-	// Transport.ResponseHeaderTimeout 约束，流中空闲由 IdleTimeout 约束。
-	// 与 HTTP 共享同一个 *http.Transport 实例，连接池不重复。
+	// ChatHTTP Чат SSE выделенный client：Без общего лимита времени (Timeout=0），первый байт от
+	// Transport.ResponseHeaderTimeout ограничение, простой в стриме — IdleTimeout ограничение.
+	// и HTTP совместное использование одного *http.Transport Экземпляр, пул соединений не дублируется.
 	ChatHTTP *http.Client
 
-	// HeaderTimeout 聊天 SSE 首字节前（响应头）超时；<=0 表示未设置（回落 HTTP.Timeout）。
+	// HeaderTimeout Чат SSE Таймаут до первого байта (заголовки ответа);<=0 означает не задано (фолбэк HTTP.Timeout）。
 	HeaderTimeout time.Duration
-	// IdleTimeout 聊天 SSE 流中空闲超时；<=0 表示禁用空闲监控。
+	// IdleTimeout Чат SSE тайм-аут простоя в потоке;<=0 Означает отключение мониторинга простоя.
 	IdleTimeout time.Duration
 
-	// effortsMu/efforts 缓存各模型 supportedEfforts（FetchModels 刷新），供请求体 effort 降级。
-	// 按 realm 分层桶（cn/global）：同模型名跨域探测的 effort 集合可能不同，
-	// 混桶会互相污染（C-2）。
+	// effortsMu/efforts Кэшировать каждую модель supportedEfforts（FetchModels обновление), для тела запроса effort фолбэк.
+	// Нажать realm Иерархические бакеты (cn/global）：кросс-доменное зондирование одного имени модели effort коллекции могут различаться,
+	// Смешивание бакетов приводит к загрязнению (C-2）。
 	effortsMu sync.RWMutex
-	efforts   map[string]map[string][]string
-	// defaultEfforts 缓存各模型 reasoning.defaultEffort（FetchModels 刷新），供
-	// thinking.go 补档：缺显式 effort 时优先用模型声明默认档，空串回退硬编码 high。
-	// 与 efforts 同 realm 分层桶（同 C-2 隔离原则），共用 effortsMu。
+	efforts map[string]map[string][]string
+	// defaultEfforts Кэшировать каждую модель reasoning.defaultEffort（FetchModels обновления), для
+	// thinking.go бэкфилл: отсутствует явный effort приоритет — дефолтный уровень из объявления модели, пустая строка — fallback на хардкод high。
+	// и efforts Совм. realm Иерархические бакеты (одно C-2 принцип изоляции), совместное использование effortsMu。
 	defaultEfforts map[string]map[string]string
-	// modelRates 缓存各模型当前生效积分倍率（规范化数值，如 "0.5"）。
-	// 与 efforts 共用 realm 分层和锁；每次成功刷新模型目录时整体替换对应域。
+	// modelRates кеш текущего действующего множителя баллов по моделям (нормализованное значение, напр. "0.5"）。
+	// и efforts общий realm Слои и блокировки; при каждом успешном обновлении каталога моделей соответствующая область заменяется целиком.
 	modelRates map[string]map[string]string
 
-	// globalModels 缓存 global 模型名目录探测结果（成功 ∩ 静态 overlay；
-	// 1h TTL + 5min 负缓存），见 global_models.go。按实例持有，测试新建 Client 即隔离。
+	// globalModels Кеш global Результат зондирования каталога имен моделей (успех ∩ Статический overlay；
+	// 1h TTL + 5min негативный кэш), см. global_models.go。Хранится на инстанс, тест создает новый Client т.е. изоляция.
 	globalModels fetchGlobalModelsCache
 
-	// SanitizeFingerprints 出站请求体黑名单指纹脱敏开关（默认 true；false 完全还原）。
-	// 面板保存配置热改 + chat 热路径并发读写，用 atomic.Bool 消除数据竞争。
+	// SanitizeFingerprints переключатель десенсибилизации отпечатка блэклиста тела исходящего запроса (по умолчанию true；false полное восстановление).
+	// горячее изменение конфига сохранением в панели + chat конкурентное чтение/запись на горячем пути, использовать atomic.Bool Устранение гонки данных.
 	SanitizeFingerprints atomic.Bool
 
-	// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
-	// 空 = 默认官方形态：chat/refresh/FetchModels 走
-	// `WorkBuddy/<ver> WorkBuddy/<ver> CLI/<cliVer>`；billing 走 `WorkBuddy/<ver>`
-	// （仅当 client_name 非空）。
+	// UserAgent исходящий User-Agent Явное перекрытие (при непустом значении действует полный путь, приоритет над трёхсегментным дефолтом).
+	// пустой = официальная форма по умолчанию:chat/refresh/FetchModels Ход
+	// `WorkBuddy/<ver> WorkBuddy/<ver> CLI/<cliVer>`；billing Ход `WorkBuddy/<ver>`
+	// （только если client_name непусто).
 	UserAgent string
 
-	// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` + X-IDE-Version）。
-	// 空 = 内置默认（对齐官方 5.5.4 分发包）。
+	// ClientVersion WorkBuddy Сегмент версии клиента (исходящий UA `WorkBuddy/<ver>` + X-IDE-Version）。
+	// пустой = Встроено по умолчанию (выравнивание с официальным 5.5.4 дистрибутив).
 	ClientVersion string
 
-	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认（官方内置 CLI 2.137.1）。
+	// CliVersion исходящий UA Средний `CLI/<ver>` версия сегмента. Пусто = встроенный дефолт (официальный встроенный CLI 2.137.1）。
 	CliVersion string
 
-	// ClientName 用量归属头取值（X-Product / X-IDE-Name / X-IDE-Type / X-IDE-Version）。
-	// 空 = 旧行为：X-Product="SaaS"，不设 X-IDE-*（向后兼容，不突变归因）。
+	// ClientName значение заголовка принадлежности расхода (X-Product / X-IDE-Name / X-IDE-Type / X-IDE-Version）。
+	// пустой = Старое поведение:X-Product="SaaS"，Не задано X-IDE-*（обратная совместимость, без скачкообразного изменения атрибуции).
 	ClientName string
 
-	// PassthroughIP 是否透传客户端 IP 给上游（X-Forwarded-For/X-Real-IP 首段）。
-	// 缺省 false（反代安全边界）；handler 在 chat 路径按请求把 clientIP 传入 ChatStream。
+	// PassthroughIP прозрачно прокидывать клиента IP апстриму (X-Forwarded-For/X-Real-IP первый сегмент).
+	// по умолчанию false（граница безопасности reverse proxy);handler В chat Путь по запросу clientIP Входящий ChatStream。
 	PassthroughIP bool
 
-	// DeviceToken 设备风控 Token（X-Device-Token 头）全局兜底来源：config upstream.device_token。
-	// 解析优先级：auth.Auth.DeviceToken > DeviceToken（config）> DeviceTokenFile（文件）。
+	// DeviceToken Риск-контроль устройства Token（X-Device-Token заголовок) глобальный fallback-источник:config upstream.device_token。
+	// приоритет парсинга:auth.Auth.DeviceToken > DeviceToken（config）> DeviceTokenFile（файл).
 	DeviceToken string
 
-	// DeviceTokenFile 设备 token 文件路径兜底（宿主落盘的桌面端 token，5 分钟读取缓存）。
+	// DeviceTokenFile Устройство token Фолбэк пути к файлу (десктоп хоста с сохранением на диск token，5 минут читать кэш).
 	DeviceTokenFile string
 
-	ChatBaseCN    string
+	ChatBaseCN string
 	BillingBaseCN string
-	// WebBaseCN 官网（workbuddy.cn）域：部分「任务领奖」类接口只在此域提供
-	// （Web 成长中心用；CLI 域 copilot.tencent.com 的同名路径返回 400）。
+	// WebBaseCN Официальный сайт (workbuddy.cn）Домен: часть интерфейсов типа "получение награды за задание» доступна только в этом домене
+	// （Web Используется центром роста;CLI Домен copilot.tencent.com возврат по одноимённому пути 400）。
 	WebBaseCN string
 
-	// ChatBaseGlobal / BillingBaseGlobal 国际版（global realm）上游 base。
-	// 空 = 缺省默认 https://www.workbuddy.ai（D5）。
-	ChatBaseGlobal    string
+	// ChatBaseGlobal / BillingBaseGlobal Международная версия (global realm）апстрим base。
+	// пустой = дефолт по умолчанию https://www.workbuddy.ai（D5）。
+	ChatBaseGlobal string
 	BillingBaseGlobal string
 
-	// GlobalEnabled 是否启用 global realm 路由（config global.enabled，缺省 true）。
-	// false 时即便用户 auth 写了 realm=global 也**不**路由到 global base——
-	// chatBase/billingBase 返回 CN base，路径也走 CN（双保险，与 auth.Realm() 的开关闸呼应）。
+	// GlobalEnabled включено ли global realm Маршрутизация (config global.enabled，по умолчанию true）。
+	// false даже если пользователь в это время auth записано realm=global также**Не**Маршрутизировать в global base——
+	// chatBase/billingBase вернуть CN base，Путь также идет через CN（двойная страховка, с auth.Realm() коррелирует с переключателем-шлюзом).
 	GlobalEnabled bool
 }
 
-// New 生产默认值。Transport 由 newTransport() 集中构造（连接层加固：真正禁 h2 /
-// TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见 transport.go——吸收上游
-// kongjianguan 4 连击实测经验）。
+// New Дефолт для продакшена.Transport От newTransport() Централизованное конструирование (усиление слоя соединения: реально запретить h2 /
+// TLS Таймаут хендшейка / Короткий keepalive детект / при ошибке очистить пул, параметры см. transport.go——Поглотить апстрим
+// kongjianguan 4 опыт факт-теста серийных попаданий).
 func New() *Client {
 	tr := newTransport()
 	c := &Client{
-		HTTP:         &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:     &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
-		ChatBaseCN:   "https://copilot.tencent.com",
+		HTTP: &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP: &http.Client{Timeout: 0, Transport: tr}, // Без общей длительности; первый байт от ResponseHeaderTimeout Управление
+		ChatBaseCN: "https://copilot.tencent.com",
 		BillingBaseCN: "https://www.codebuddy.cn",
-		WebBaseCN:    "https://www.workbuddy.cn",
-		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：
-		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。
+		WebBaseCN: "https://www.workbuddy.cn",
+		// GlobalEnabled по умолчанию true（и config global.enabled по умолчанию true совпадает; чисто CN Поведение деплоя без изменений:
+		// CN аккаунт всегда считается cn，global base Только в realm=global использовано на аккаунте).
 		GlobalEnabled: true,
 	}
 	c.SanitizeFingerprints.Store(true)
 	return c
 }
 
-// chatHTTP 返回聊天专用 client；未设置（如测试只注入 HTTP）时回落 HTTP。
+// chatHTTP Возвращать только для чата client；не задано (напр., в тесте инжектируется только HTTP）откат при HTTP。
 func (c *Client) chatHTTP() *http.Client {
 	if c.ChatHTTP != nil {
 		return c.ChatHTTP
@@ -709,10 +709,10 @@ func (c *Client) chatHTTP() *http.Client {
 	return c.HTTP
 }
 
-// defaultGlobalBase 缺省 global base（D5：config 未覆盖时默认 workbuddy.ai）。
+// defaultGlobalBase по умолчанию global base（D5：config по умолчанию если не покрыто workbuddy.ai）。
 const defaultGlobalBase = "https://www.workbuddy.ai"
 
-// globalChatBase 生效的 global chat base：Client.ChatBaseGlobal 非空取之，否则默认。
+// globalChatBase действующий global chat base：Client.ChatBaseGlobal если не пусто — брать, иначе дефолт.
 func (c *Client) globalChatBase() string {
 	if c.ChatBaseGlobal != "" {
 		return c.ChatBaseGlobal
@@ -720,7 +720,7 @@ func (c *Client) globalChatBase() string {
 	return defaultGlobalBase
 }
 
-// globalBillingBase 生效的 global billing base：Client.BillingBaseGlobal 非空取之，否则默认。
+// globalBillingBase действующий global billing base：Client.BillingBaseGlobal если не пусто — брать, иначе дефолт.
 func (c *Client) globalBillingBase() string {
 	if c.BillingBaseGlobal != "" {
 		return c.BillingBaseGlobal
@@ -728,37 +728,37 @@ func (c *Client) globalBillingBase() string {
 	return defaultGlobalBase
 }
 
-// globalOn 报告账号是否路由到 global 上游：GlobalEnabled 开且账号 Realm()==global。
-// 双保险：config 开关是第一道闸（上游侧），auth.Realm() 的开关闸是第二道（账号侧）。
+// globalOn Сообщить, маршрутизируется ли аккаунт на global Апстрим:GlobalEnabled Включено и аккаунт Realm()==global。
+// Двойная страховка:config переключатель — первый шлюз (со стороны апстрима),auth.Realm() шлюз-переключатель — второй рубеж (сторона аккаунта).
 func (c *Client) globalOn(a *auth.Auth) bool {
 	return c.GlobalEnabled && a != nil && a.Realm() == "global"
 }
 
-// 路径常量：CN 与 global 共用的 chat 出站路径（/v2 单路径）。
+// константы путей:CN и global общий chat Исходящий путь (/v2 один путь).
 const chatCompletionsPath = "/v2/chat/completions"
 
-// chatPaths 返回按 realm 的 chat 路径候选序列：
-// global → [/v2]（#119 固定单路径：/console 挂腾讯云 WAF body 内容规则，反引号
-// printf/whoami 等命令执行特征确定性 403；/v2 同 base 不挂该规则，实测等价端点。
-// 已知取舍：若上游未来关闭 /v2，global chat 整体不可用——届时应重新启用 /console
-// 路径，此注释即"坏了再说"的锚点）；cn → [/v2]（单元素，现状）。
+// chatPaths Возврат по realm chat последовательность кандидатов пути:
+// global → [/v2]（#119 Фиксированный одиночный путь:/console Размещено на Tencent Cloud WAF body правила содержимого, обратные кавычки
+// printf/whoami детерминированность признаков выполнения команд типа 403；/v2 Совм. base правило не применяется, фактически эквивалентный эндпоинт.
+// известный компромисс: если апстрим в будущем закроет /v2，global chat полностью недоступен — тогда следует повторно включить /console
+// Путь, данный комментарий —"сломается — тогда чинить"якорь);cn → [/v2]（один элемент, текущее состояние).
 func (c *Client) chatPaths(a *auth.Auth) []string {
 	return []string{chatCompletionsPath}
 }
 
-// billing 域端点路径（billingBase + path）。balance/checkin 与 report（report.go）同域，
-// 统一走 billingJSON 发请求。
+// billing Путь к доменному эндпоинту (billingBase + path）。balance/checkin и report（report.go）Тот же домен,
+// Единый маршрут через billingJSON отправляет запрос.
 const (
-	billingMeterPath   = "/billing/meter/get-user-resource"    // global 首选（国际版无 /v2 前缀）
-	dailyCheckinPath   = "/billing/meter/daily-checkin"        // global 首选
-	billingMeterPathV2 = "/v2/billing/meter/get-user-resource" // CN 现状 / global fallback
+	billingMeterPath = "/billing/meter/get-user-resource" // global Приоритетный (в международной версии отсутствует /v2 префикс)
+	dailyCheckinPath = "/billing/meter/daily-checkin" // global Приоритетный
+	billingMeterPathV2 = "/v2/billing/meter/get-user-resource" // CN Текущее состояние / global fallback
 	dailyCheckinPathV2 = "/v2/billing/meter/daily-checkin"
 )
 
-// billingMeterPaths 按 realm 返回 billing/meter 域路径候选序列：
-// global → [无 /v2, 有 /v2]（404 时 fallback）；cn → [有 /v2]（现状逐字，零回归）。
-// 仅作用于 get-user-resource / daily-checkin（/billing/meter/* 族）；report /v2/report 不参与，
-// 其他 billing 端点（growth 等）路径不含 /billing/meter 前缀，走原常量不受影响。
+// billingMeterPaths Нажать realm вернуть billing/meter последовательность кандидатов пути домена:
+// global → [отсутствует /v2, Есть /v2]（404 Время fallback）；cn → [Есть /v2]（текущее состояние дословно, ноль регрессий).
+// действует только на get-user-resource / daily-checkin（/billing/meter/* семейство);report /v2/report Не участвует,
+// прочее billing эндпоинт (growth и т.д.) путь не содержит /billing/meter префикс, исходная константа не затрагивается.
 func (c *Client) billingMeterPaths(a *auth.Auth) []string {
 	if c.globalOn(a) {
 		return []string{billingMeterPath, billingMeterPathV2}
@@ -766,7 +766,7 @@ func (c *Client) billingMeterPaths(a *auth.Auth) []string {
 	return []string{billingMeterPathV2}
 }
 
-// checkinMeterPaths 同上，针对 daily-checkin。
+// checkinMeterPaths Аналогично, для daily-checkin。
 func (c *Client) checkinMeterPaths(a *auth.Auth) []string {
 	if c.globalOn(a) {
 		return []string{dailyCheckinPath, dailyCheckinPathV2}
@@ -781,24 +781,24 @@ func (c *Client) chatBase(a *auth.Auth) string {
 	return c.ChatBaseCN
 }
 
-// prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
-// realm 为账号 Realm()（cn/global），供 efforts 缓存分桶（跨域 effort 集合不互相污染）。
+// prepareBody Сборка тела исходящего запроса (переключатель десенсибилизации от Client.SanitizeFingerprints управление).
+// realm для аккаунта Realm()（cn/global），Подача efforts Бакетирование кэша (кросс-доменное effort коллекции не загрязняют друг друга).
 func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []byte {
 	efforts, defs := c.effortsSnapshot(realm), c.defaultEffortsSnapshot(realm)
 	if realmKey(realm) == "global" {
-		// global 域降级源 = 远端探测桶（权威）∪ 产品静态兜底表（全局 21 名内档位如
-		// deepseek-v4.1-flash ['high']）。当前探测桶为空时也按静态表降级，不全程透传
-		//（issue #84：往 WorkBuddy 上游发 low/max 非法，须降级到 high）。
+		// global Источник даунгрейда домена = Удаленный бакет зондирования (авторитетный)∪ статическая fallback-таблица продукта (глобально 21 уровни в имени, напр.
+		// deepseek-v4.1-flash ['high']）。при пустом probe-бакете деградация по статической таблице, без сквозного проксирования
+		//（issue #84：К WorkBuddy апстрим отправляет low/max невалидно, требуется откат до high）。
 		efforts, defs = globalEffortMap(efforts, defs)
 	}
 	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints.Load(), efforts, defs)
-	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
-	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。
+	// prompt_cache_key Инъекция (P0 Оптимизация затрат, снижение затрат ~17×）：стабильный кеш-ключ с изоляцией по аккаунту,
+	// чтобы последовательные запросы одного клиента к одному аккаунту попадали в префиксный кэш апстрима.
 	body = InjectPromptCacheKey(body, uid, conversationID)
 	return body
 }
 
-// effortsSnapshot 返回 effort 能力缓存副本；nil 表示未知（透传不降级）。
+// effortsSnapshot вернуть effort копия кэша capabilities;nil означает неизвестно (прозрачная передача без даунгрейда).
 func (c *Client) effortsSnapshot(realm string) map[string][]string {
 	c.effortsMu.RLock()
 	defer c.effortsMu.RUnlock()
@@ -813,8 +813,8 @@ func (c *Client) effortsSnapshot(realm string) map[string][]string {
 	return cp
 }
 
-// defaultEffortsSnapshot 返回指定 realm 的模型 defaultEffort 缓存副本；
-// 该域无探测或无声明默认档 → nil（thinking.go 回退硬编码 high）。
+// defaultEffortsSnapshot Вернуть указанный realm модель defaultEffort копия кэша;
+// Для домена нет проб или заявленного дефолтного профиля → nil（thinking.go Хардкод отката high）。
 func (c *Client) defaultEffortsSnapshot(realm string) map[string]string {
 	c.effortsMu.RLock()
 	defer c.effortsMu.RUnlock()
@@ -829,7 +829,7 @@ func (c *Client) defaultEffortsSnapshot(realm string) map[string]string {
 	return cp
 }
 
-// realmKey 归一化 efforts 缓存键：cn/global。空 realm 视为 cn（老调用/无前缀模型名）。
+// realmKey Нормализация efforts Ключ кэша:cn/global。пустой realm считать как cn（старый вызов/имя модели без префикса).
 func realmKey(realm string) string {
 	if realm == "" {
 		return "cn"
@@ -844,8 +844,8 @@ func (c *Client) billingBase(a *auth.Auth) string {
 	return c.BillingBaseCN
 }
 
-// webBase 返回官网域（任务领奖类接口；未注入时回落默认）。
-// realm 感知：global 账号切国际站 workbuddy.ai，CN 用 workbuddy.cn。
+// webBase Возвращает домен официального сайта (интерфейсы получения наград за задачи; при отсутствии инъекции — fallback по умолчанию).
+// realm Восприятие:global переключение аккаунта на международный сайт workbuddy.ai，CN использовать workbuddy.cn。
 func (c *Client) webBase(a *auth.Auth) string {
 	if c.globalOn(a) {
 		return defaultGlobalBase
@@ -856,9 +856,9 @@ func (c *Client) webBase(a *auth.Auth) string {
 	return "https://www.workbuddy.cn"
 }
 
-// doJSON 发请求并解信封；HTTP 非 2xx 或业务 code != 0 时返回带 body 片段的 *Error。
-// body 读失败（连接中断/空闲掐流/截断）返回普通错误（非 *Error）——半截 body 不进
-// Classify，不参与账号惩罚（传输层故障不该喂熔断误罚号）。
+// doJSON отправить запрос и распаковать конверт;HTTP не 2xx или бизнес-логике code != 0 при возврате с body фрагмента *Error。
+// body ошибка чтения (обрыв соединения/Троттлинг при простое/усечение) возвращает обычную ошибку (не *Error）——Обрывок body не входит
+// Classify，не участвует в пенальти аккаунта (сбой транспортного уровня не должен триггерить circuit breaker).
 func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -887,27 +887,27 @@ func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
 	return env.Data, nil
 }
 
-// RefreshToken 刷新 access token；成功时更新 a 的字段（缺省值保留旧值），
-// 调用方负责 SaveAtomic。全程持 a 锁，防止并发 SaveAtomic 读半更新 token。
-// refreshIOTimeout 刷新端点网络 I/O 上限（两段式锁外执行，防上游 hang 长占锁）。
+// RefreshToken Обновление access token；обновление при успехе a поле (значение по умолчанию сохраняет старое),
+// Ответственность вызывающей стороны SaveAtomic。удерживать на всём протяжении a блокировка, защита от конкурентности SaveAtomic Чтение с половинным обновлением token。
+// refreshIOTimeout обновить сеть эндпоинтов I/O лимит (выполнение вне двухфазной блокировки, защита от апстрима hang долгое удержание блокировки).
 const refreshIOTimeout = 30 * time.Second
 
-// refreshTokenExpiresInMax refresh 响应 expiresIn 的量级上限（10 年，纯防御值：
-// 实测 R-D 响应恒 5184000=60d）。超限视为上游脏数据，不写 ExpiresAt（保留旧值），
-// 防止 NeedsRefresh 永假导致 token 永不刷新反而真过期失效。
+// refreshTokenExpiresInMax refresh Ответ expiresIn верхний предел порядка (10 год, чисто защитное значение:
+// На практике R-D ответ всегда 5184000=60d）。превышение считать грязными данными апстрима, не писать ExpiresAt（сохранить старое значение),
+// предотвратить NeedsRefresh вечно false приводит к token никогда не обновляется, наоборот истекает и становится недействительным.
 const refreshTokenExpiresInMax = 10 * 365 * 24 * time.Hour
 
-// RefreshToken 刷新 access token；成功时更新 a 的字段（缺省值保留旧值），
-// 调用方负责 SaveAtomic。
+// RefreshToken Обновление access token；обновление при успехе a поле (значение по умолчанию сохраняет старое),
+// Ответственность вызывающей стороны SaveAtomic。
 //
-// 并发安全模型（两段式，缩小持锁窗口）：
-//   - 锁内仅做「读 refreshToken 快照」与「校验未变后写回新 token」两小段内存操作；
-//   - 网络 I/O（doJSON）在**锁外**执行，带 30s ctx 超时——避免上游 hang 时长时间
-//     独占 a.mu，阻塞同账号的 SaveAtomic / 其他刷新（issue:持锁 120s I/O）。
-//   - 写回前重新校验快照一致性：若锁外期间另一 goroutine 已完成刷新（refreshToken
-//     已变），本次结果直接采用（新 token 已生效），不再重复写回。
+// Модель потокобезопасности (двухфазная, сужение окна удержания блокировки):
+// - Внутри блокировки только "чтение refreshToken снимок» и "запись нового после проверки неизменности token」Две короткие операции в памяти;
+// - сеть I/O（doJSON）В**Вне блокировки**Выполнение с 30s ctx таймаут — избегать апстрима hang длительное время
+// эксклюзивный a.mu，блокирует тот же аккаунт SaveAtomic / прочие обновления (issue:удержание блокировки 120s I/O）。
+// - Перед записью повторно проверить консистентность снапшота: если вне блокировки другой goroutine Обновление завершено (refreshToken
+// уже изменилось), результат этого раза применяется напрямую (новый token уже вступило в силу), повторная запись не нужна.
 func (c *Client) RefreshToken(a *auth.Auth) error {
-	// 第 1 段（锁内）：读快照。
+	// № 1 Секция (под блокировкой): чтение снапшота.
 	a.Lock()
 	rtSnapshot := a.RefreshToken
 	atBefore := a.AccessToken
@@ -923,49 +923,49 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	if err != nil {
 		return err
 	}
-	// RefreshHeaders 读取 a 的字段（domain/uid 等）注入请求头——需在锁内取快照值，
-	// 用一个显式逐字段拷贝的临时 auth 构造头（不拷贝 sync.Mutex，避免 vet copies-lock）。
+	// RefreshHeaders Чтение a поле (domain/uid и т.д.) инжектятся в заголовки запроса — нужно брать снапшот под блокировкой,
+	// Использовать временный объект с явным покопийным копированием полей auth формирование заголовка (без копирования sync.Mutex，Избежать vet copies-lock）。
 	a.Lock()
 	hdrSnapshot := auth.Auth{
-		AccessToken:  a.AccessToken,
+		AccessToken: a.AccessToken,
 		RefreshToken: rtSnapshot,
-		ExpiresAt:    a.ExpiresAt,
-		Domain:       a.Domain,
-		UID:          a.UID,
+		ExpiresAt: a.ExpiresAt,
+		Domain: a.Domain,
+		UID: a.UID,
 		EnterpriseID: a.EnterpriseID,
-		Nickname:     a.Nickname,
-		DeviceToken:  a.DeviceToken,
+		Nickname: a.Nickname,
+		DeviceToken: a.DeviceToken,
 	}
 	a.Unlock()
 	c.RefreshHeaders(req, &hdrSnapshot)
 
-	// 网络 I/O（锁外，30s 上限）。
+	// сеть I/O（вне блокировки,30s лимит).
 	data, err := c.doJSON(req)
 	if err != nil {
 		return err
 	}
 	var tok struct {
-		AccessToken  string `json:"accessToken"`
+		AccessToken string `json:"accessToken"`
 		RefreshToken string `json:"refreshToken"`
-		ExpiresIn    int64  `json:"expiresIn"`
-		Domain       string `json:"domain"`
+		ExpiresIn int64 `json:"expiresIn"`
+		Domain string `json:"domain"`
 	}
 	if err := json.Unmarshal(data, &tok); err != nil || tok.AccessToken == "" {
 		return fmt.Errorf("refresh_failed: no accessToken in response — re-login required")
 	}
 
-	// 第 2 段（锁内）：校验快照一致后写回。
+	// № 2 секция (под блокировкой): после проверки консистентности снапшота записать обратно.
 	a.Lock()
 	defer a.Unlock()
-	// 写回守卫是 AND 语义：锁外期间另一刷新已完成 → 两 token 必同时变化（实测 R-D：
-	// refresh 响应 accessToken/refreshToken 总是一起 rotate，写回也同时写两个），AND
-	// 即「并发刷新已完成」判据；AND 与 OR 在真实形态下等价。唯 OR 会额外放弃的
-	// 「只有单 token 变化」（如手工只改 auth 文件一个字段）不构成放弃条件——本次
-	// 结果覆盖手工编辑。
+	// гард обратной записи — AND семантика: за время вне блокировки другое обновление уже завершено → Два token должны меняться одновременно (фактически R-D：
+	// refresh Ответ accessToken/refreshToken всегда вместе rotate，обратная запись пишет сразу в оба),AND
+	// т.е. критерий "конкурентное обновление завершено»;AND и OR эквивалентно в реальной форме. Только OR будет дополнительно отброшено
+	// 「Только одиночный token изменение» (напр. ручное изменение только auth Поле файла) не является условием отказа — в данном случае
+	// результат перезаписывает ручное редактирование.
 	if a.AccessToken != atBefore && a.RefreshToken != rtSnapshot {
-		// 锁外期间另一 goroutine 已完成刷新：新 token 已生效，本次结果不必再写
-		// （实测 R-E：服务端无 rotation 撤销，并发双刷新拿到的两个新 token 都有效，
-		// 后写覆盖先写二者等价可用；提前返回避免无意义覆盖与 ExpiresAt 抖动）。
+		// Вне блокировки другой goroutine обновление завершено: новый token Уже применено, результат текущего вызова можно не записывать
+		// （На практике R-E：на сервере отсутствует rotation Откат, два новых токена из конкурентного двойного обновления token все действительны,
+		// Перезапись последним эквивалентна; ранний return избегает бессмысленной перезаписи и ExpiresAt джиттер).
 		return nil
 	}
 	a.AccessToken = tok.AccessToken
@@ -975,45 +975,45 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 	if tok.Domain != "" {
 		a.Domain = tok.Domain
 	}
-	// preserveExpiry：响应缺 expiresIn 时保留旧过期时间，避免刷新风暴。
-	// 实测 R-D 响应恒带 expiresIn=5184000（60d）——缺省分支仅为防御，保留旧值
-	// 避免过期判定漂移。同理，超过 10 年的 expiresIn 按脏值处理保留旧值：
-	// 实测 JWT exp-iat 与 expiresIn 严格自洽（R-F），超量级值只会是上游脏数据，
-	// 照写会把 ExpiresAt 推到荒谬未来 → NeedsRefresh 永假 → token 永不刷新
-	// 反而真过期失效。
+	// preserveExpiry：Ответ отсутствует expiresIn сохранять старое время истечения, избегать шторма обновлений.
+	// На практике R-D Ответ всегда содержит expiresIn=5184000（60d）——Ветка по умолчанию — только защита, сохраняет старое значение
+	// избежать дрейфа проверки истечения. Аналогично, свыше 10 года expiresIn Обработать как dirty, сохранить старое значение:
+	// На практике JWT exp-iat и expiresIn Строгая самосогласованность (R-F），Сверхбольшие значения — только грязные данные апстрима,
+	// Прямая запись затрет ExpiresAt сдвинет в абсурдное будущее → NeedsRefresh Всегда false → token никогда не обновлять
+	// наоборот реально истекает и становится недействительным.
 	if tok.ExpiresIn > 0 && time.Duration(tok.ExpiresIn)*time.Second < refreshTokenExpiresInMax {
 		a.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix()
 	}
 	return nil
 }
 
-// ChatStream 发 chat 请求并返回原始 SSE body 流（调用方负责 Close）。
-// 等价于 ChatStreamContext(context.Background(), ...)：不带调用方取消语义。
-// 需要客户端断开联动的调用方用 ChatStreamContext 传入请求 ctx。
+// ChatStream Отправка chat Запросить и вернуть оригинал SSE body Поток (ответственность вызывающей стороны Close）。
+// Эквивалентно ChatStreamContext(context.Background(), ...)：Без семантики отмены вызывающей стороны.
+// Вызывающей стороне, которой нужно разорвать связку с клиентом, использовать ChatStreamContext входящий запрос ctx。
 //
-// global realm：先打 /console/chat/completions，404/405 时同一 base 二次换 /v2/chat/completions
-// （上游新旧路径分叉，PLAN R9 fallback 顺序）。cn：/v2/chat/completions 现状不变。
+// global realm：Сначала пробить /console/chat/completions，404/405 При этом тот же base вторичная замена /v2/chat/completions
+// （развилка старого/нового пути апстрима,PLAN R9 fallback порядок).cn：/v2/chat/completions Состояние без изменений.
 func (c *Client) ChatStream(a *auth.Auth, body []byte, clientIP string, meta ChatMeta) (rc io.ReadCloser, status int, respBody []byte, err error) {
 	return c.ChatStreamContext(context.Background(), a, body, clientIP, meta)
 }
 
-// ChatStreamContext 同 ChatStream，但从 ctx 派生请求 context：调用方（handler）传入
-// r.Context() 后，客户端断连/请求取消会立即中断在途上游调用、释放连接与账号在途名额，
-// 不再空转到 IdleTimeout。ctx 为 nil 时回落 Background。成功流的 cancel 仍由
-// monitorBody 的 Close 接管（reqCtx 取消与显式 Close 任一触发即断）。
+// ChatStreamContext Совм. ChatStream，Но с ctx Производный запрос context：вызывающая сторона (handler）Входящий
+// r.Context() после, дисконнект клиента/Отмена запроса немедленно прерывает активные upstream-вызовы, освобождает соединения и квоту аккаунта,
+// Больше не холостой ход до IdleTimeout。ctx для nil откат при Background。успешного потока cancel по-прежнему
+// monitorBody Close Перехват (reqCtx Отмена и явный Close срабатывание любого условия — разрыв).
 //
-// 错误路径（≥400 且非 fallback 状态码）除 (status, respBody) 外还返回**已分类的**
-// *Error（Kind 信封 + Retry-After 头解析）：客户端错误分类在此一次完成，handler
-// 不再对 body 二次 Classify（消除「上游分类一次、网关再分类一次」的双路径漂移面），
-// Retry-After 也随信封流动。respBody 仍原样返回（错误透传语义：message 透传上游
-// 原文）。判定为 ErrNone 的响应（理论上不存在，防御）err 为 nil，handler 按
-// respBody 自行兜底。
+// Путь ошибки (≥400 и не fallback код статуса) кроме (status, respBody) кроме того возвращает**уже классифицированные**
+// *Error（Kind Конверт + Retry-After разбор заголовков): классификация клиентских ошибок выполняется здесь за один раз,handler
+// больше не для body повторный Classify（устранение дрейфа двух путей "классификация апстримом + повторная классификация шлюзом»),
+// Retry-After Также передается вместе с конвертом.respBody всё равно возвращается как есть (семантика сквозной передачи ошибки:message Проброс на апстрим
+// оригинал). Считается ErrNone ответ (теоретически не существует, защита)err для nil，handler Нажать
+// respBody Собственный фолбэк.
 //
-// global chat 自 #119 实测后固定走 /v2（chat 层无 fallback 链；billing 层的 404
-// fallback 独立存在，语义不受影响）。ensureConsoleSystem 在 prepareBody 后统一套用
-// 全局脚本：首条消息非 system 时前置兜底 system（防 console 域上游 code 11-128；
-// #119 后 global 出站固定 /v2，该兜底保留——上游对 /v2 是否需要 system 无实测
-// 反证，删了无回滚路径）。
+// global chat авто #119 После замера идти фиксированно через /v2（chat на уровне отсутствует fallback цепочка;billing уровня 404
+// fallback существует независимо, семантика не затронута).ensureConsoleSystem В prepareBody после применяется единообразно
+// глобальный скрипт: первое сообщение не system предварительный фолбэк по времени system（Защита console Апстрим домена code 11-128；
+// #119 После global исходящий фиксированный /v2，Этот фолбэк сохранён — апстрим для /v2 требуется ли system Без фактических измерений
+// доказательство от противного, после удаления нет пути отката).
 func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byte, clientIP string, meta ChatMeta) (rc io.ReadCloser, status int, respBody []byte, err error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1022,9 +1022,9 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 	if c.globalOn(a) {
 		prepared = ensureConsoleSystem(prepared)
 	}
-	// reqCtx 的 cancel 在每个出口显式调用（Do 失败 / ≥400 / 成功分支移交 monitorBody），
-	// 循环本身各分支必 return——无循环尾兜底代码（此前外层 var cancel 从未赋值 +
-	// 尾部不可达 cancel() 是潜伏 nil-panic，已删；chatPaths 恒非空由构造保证）。
+	// reqCtx cancel Явный вызов на каждом выходе (Do ошибка / ≥400 / передача успешной ветки monitorBody），
+	// Все ветки цикла обязательно return——Без хвостового fallback-кода цикла (ранее внешний var cancel Никогда не присваивалось +
+	// Хвост недостижим cancel() является скрытым nil-panic，Удалено;chatPaths всегда непусто, гарантируется конструктором).
 	for _, path := range c.chatPaths(a) {
 		endpoint := c.chatBase(a) + path
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(prepared))
@@ -1032,17 +1032,17 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			return nil, 0, nil, err
 		}
 		c.ChatHeaders(req, a, clientIP, meta)
-		// 从调用方 ctx 派生：保留取消传播（父 ctx 取消 → 本 ctx 取消），
-		// 同时 monitorBody.Close 仍能独立 cancel 本分支（空闲掐流）。
+		// От вызывающей стороны ctx деривация: сохранять распространение отмены (родитель ctx отмена → текущий ctx отмена),
+		// Одновременно monitorBody.Close Всё ещё независимо cancel данная ветка (обрыв потока при простое).
 		reqCtx, cancel := context.WithCancel(ctx)
 		req = req.WithContext(reqCtx)
 		resp, err := c.chatHTTP().Do(req)
 		if err != nil {
 			cancel()
 			log.Printf("ERR: [upstream] chat_stream acct=%s: transport error: %v", logfmt.Label(a.UID, a.Nickname), err)
-			// 传输层失败 → 清空共享连接池的空闲连接（连接层加固）：失败连接可能仍
-			// 留在空闲池里，下一个请求会继续捡到它——仅靠 IdleConnTimeout 等过期
-			// 不够，主动清池才断根。
+			// Сбой транспортного уровня → Очистка idle-соединений общего пула (усиление на уровне соединений): сбойное соединение может всё ещё
+			// остается в пуле idle, следующий запрос снова его подхватит — только за счет IdleConnTimeout и т.п. истекает
+			// недостаточно, только активная очистка пула устраняет причину.
 			roundTripCloseIdle(c.chatHTTP().Transport)
 			return nil, 0, nil, err
 		}
@@ -1050,8 +1050,8 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			cancel()
-			// body 读失败（掐流/截断）→ 传输层错误：半截 raw 不交回调用方进 Classify，
-			// 否则 handler 侧 applyErrorPolicy 会按误判分类罚号。
+			// body Ошибка чтения (дросселирование/обрезка)→ Ошибка транспортного уровня: оборванный raw не возвращать вызывающей стороне в Classify，
+			// Иначе handler Боковой applyErrorPolicy Будет штрафовать номер по категории ложного срабатывания.
 			if rerr != nil {
 				log.Printf("ERR: [upstream] chat_stream acct=%s: read body: %v", logfmt.Label(a.UID, a.Nickname), rerr)
 				return nil, 0, nil, fmt.Errorf("read body: %w", rerr)
@@ -1059,9 +1059,9 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			kind := Classify(resp.StatusCode, string(raw))
 			log.Printf("WARN: [upstream] chat_stream acct=%s: upstream %d %s body=%s",
 				logfmt.Label(a.UID, a.Nickname), resp.StatusCode, kind, truncate(string(raw), 200))
-			// ≥400 直接返回（#119 后 global 单路径 /v2，chat 层无 fallback 链）。
-			// 分类一次、随 Kind 信封返回（含 Retry-After 头解析）：
-			// ErrNone 是防御分支（≥400 不应产生 None），返回原文让 handler 兜底。
+			// ≥400 Прямой возврат (#119 После global Один путь /v2，chat на уровне отсутствует fallback цепочка).
+			// классификация один раз, далее Kind Возврат в конверте (вкл. Retry-After разбор заголовка):
+			// ErrNone это защитная ветка (≥400 Не должно порождать None），Вернуть оригинал, чтобы handler Фолбэк.
 			if kind == ErrNone {
 				return nil, resp.StatusCode, raw, nil
 			}
@@ -1071,118 +1071,118 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			}
 			return nil, resp.StatusCode, raw, ue
 		}
-		// 成功分支：cancel 所有权交给 monitorBody（其 Close 会 cancel）；
-		// IdleTimeout<=0 时 monitorBody 原样返回底流、无人调 cancel——可接受：
-		// 取消传播由 http.Transport 在 body Close / 父 ctx 取消时处理，连接正常清理。
+		// Ветка успеха:cancel Передать владение monitorBody（его Close Будет cancel）；
+		// IdleTimeout<=0 Время monitorBody Возвращать нижестоящий поток как есть, без регулирования cancel——допустимо:
+		// распространение отмены через http.Transport В body Close / родительский ctx Обработка при отмене, соединение корректно очищается.
 		return monitorBody(resp.Body, c.IdleTimeout, cancel), resp.StatusCode, nil, nil
 	}
-	panic("unreachable: chatPaths is never empty") // for range 空集时编译器仍要求兜底 return；chatPaths 恒非空（构造保证），永不触达
+	panic("unreachable: chatPaths is never empty") // for range При пустом множестве компилятор всё равно требует fallback return；chatPaths Всегда непусто (гарантия конструктора), недостижимо
 }
 
-// ModelInfo 动态模型信息（含 maxInputTokens/maxOutputTokens + 上游模型对象全字段）。
-// CN /console 与 global /v2 的模型对象同构，故共用此结构；上游省略的字段保持零值，
-// /v1/models 侧按「空值省略」透出（不编造）。
+// ModelInfo динамическая информация о модели (вкл. maxInputTokens/maxOutputTokens + все поля объекта модели апстрима).
+// CN /console и global /v2 Объект модели изоморфен, поэтому структура общая; опущенные апстримом поля остаются нулевыми,
+// /v1/models на стороне отдавать по правилу "null опускается» (не выдумывать).
 type ModelInfo struct {
-	ID            string
-	Name          string
-	ContextWindow int64    // = maxInputTokens
-	MaxTokens     int64    // = maxOutputTokens（思考与最终回答共享此预算，上游无独立思考上限字段）
-	Efforts       []string // reasoning.supportedEfforts（空=未知/固定档）
-	DefaultEffort string   // reasoning.defaultEffort（新模型键）或 reasoning.effort（老模型键）；空=未返回
+	ID string
+	Name string
+	ContextWindow int64 // = maxInputTokens
+	MaxTokens int64 // = maxOutputTokens（reasoning и финальный ответ делят этот бюджет, у апстрима нет отдельного лимита на reasoning)
+	Efforts []string // reasoning.supportedEfforts（пустой=неизвестно/фиксированный тариф)
+	DefaultEffort string // reasoning.defaultEffort（новый ключ модели) или reasoning.effort（ключ старой модели); пусто=Не возвращено
 
-	// 模型目录全字段（models-full-fields）：
-	Description        string   // descriptionZh 中文描述
-	Credits            string   // credits 积分倍率原文（如 "x0.05"），仅展示不参与选号
-	Tags               []string // tags 模型标签（含 badge:限时免费 等）
-	Vendor             string   // vendor 厂商标识
-	IsDefault          bool     // isDefault 是否默认模型
-	SupportsReasoning  bool     // supportsReasoning 是否支持推理
-	SupportsToolCall   bool     // supportsToolCall 是否支持工具调用
-	OnlyReasoning      bool     // onlyReasoning 是否纯推理模型
-	SupportsImages     bool     // 顶层 supportsImages（多模态能力，透出到 /v1/models）
-	MaxAllowedSize     int64    // maxAllowedSize 最大允许上下文（与 maxInputTokens 口径并列，上游各自下发）
-	CanDisableThinking bool     // reasoning.canDisableThinking：思考可关（off 档可用）
-	ReasoningEffort    string   // reasoning.effort 推理模式（与 supportedEfforts 数组不同源）
-	ReasoningSummary   string   // reasoning.summary 推理摘要模式（如 "auto"）
+	// все поля каталога моделей (models-full-fields）：
+	Description string // descriptionZh Описание на китайском
+	Credits string // credits исходный текст множителя баллов (напр. "x0.05"），Только отображение, без участия в выборе номера
+	Tags []string // tags Тег модели (вкл. badge:Бесплатно ограниченное время и т.д.)
+	Vendor string // vendor идентификатор вендора
+	IsDefault bool // isDefault модель по умолчанию или нет
+	SupportsReasoning bool // supportsReasoning Поддерживается ли reasoning
+	SupportsToolCall bool // supportsToolCall поддерживает ли вызов инструментов
+	OnlyReasoning bool // onlyReasoning Чистая reasoning-модель или нет
+	SupportsImages bool // Верхний уровень supportsImages（Мультимодальные возможности, прокинуть в /v1/models）
+	MaxAllowedSize int64 // maxAllowedSize максимально допустимый контекст (с maxInputTokens метрики параллельны, апстрим выдает каждую отдельно)
+	CanDisableThinking bool // reasoning.canDisableThinking：мышление можно отключить (off тариф доступен)
+	ReasoningEffort string // reasoning.effort Режим рассуждения (с supportedEfforts массивы из разных источников)
+	ReasoningSummary string // reasoning.summary Режим сводки рассуждений (напр. "auto"）
 
-	// 优惠（modelPromotions，/v3/config data.modelPromotions）：Credits 是**牌价**
-	//（转正后基准倍率），Promo* 是当前生效的限时优惠——面板据此显示「生效价 +
-	// 标签 + 牌价」。PromoFactor 为 nil 表示无 machine-readable 折扣（如「错峰
-	// 使用」只有时段文案无 factor），仅挂标签/提示。
-	PromoFactor  *float64 // 折扣系数（0=限时免费，0.5=五折）；nil=无
-	PromoCredits string   // 折扣后倍率原文（如 "0x" / "0.50x"），仅展示
-	PromoLabel   string   // 徽章文案（限时免费 / 夜间折扣 / 错峰使用）
-	PromoNote    string   // hover 说明原文（含时段/日期描述）
+	// Скидка (modelPromotions，/v3/config data.modelPromotions）：Credits Да**Курс**
+	//（базовый коэффициент после регуляризации),Promo* это действующая лимитированная акция — панель показывает по ней "действующую цену +
+	// Тег + курс».PromoFactor для nil Означает отсутствие machine-readable Скидка (напр. "внепиковая»
+	// "Использование» только текст периода без factor），Только навесить тег/подсказка.
+	PromoFactor *float64 // Коэффициент скидки (0=Ограниченное время бесплатно,0.5=скидка 50%);nil=отсутствует
+	PromoCredits string // Исходный текст коэффициента после скидки (напр. "0x« / »0.50x"），Только отображение
+	PromoLabel string // Текст бейджа (лимитированно бесплатно / Ночная скидка / использование со сдвигом пиков)
+	PromoNote string // hover Пояснение к оригиналу (включая период/описание даты)
 }
 
-// dynModelEntry 上游模型目录（CN /console 与 global /v2 同构）的单条模型解析形态，
-// FetchModels 与 global_models.go 的探测共用。iconUrl/descriptionEn/生成参数等
-// 按「不透出」原则不解析。modelInfo() 是 dynEntry→ModelInfo 映射的单一事实来源，
-// 杜绝两域映射漂移。
+// dynModelEntry Каталог моделей апстрима (CN /console и global /v2 изоморфная) форма парсинга одиночной модели,
+// FetchModels и global_models.go совместное использование проб.iconUrl/descriptionEn/параметры генерации и т.д.
+// Не парсить по принципу "не раскрывать».modelInfo() Да dynEntry→ModelInfo Единственный источник истины для маппинга,
+// Исключить дрейф маппинга между двумя доменами.
 type dynModelEntry struct {
-	ID   string `json:"id"`
+	ID string `json:"id"`
 	Name string `json:"name"`
-	// ModelID / Model id 的宽松回退键（仅 global 目录的多信封兜底用，CN 目录
-	// 不下发这两个键；字段加在这里只是让 typed 解析能"看见"它们）。
-	ModelID         string   `json:"modelId"`
-	Model           string   `json:"model"`
-	Description     string   `json:"descriptionZh"`
-	Credits         string   `json:"credits"`
-	Tags            []string `json:"tags"`
-	Vendor          string   `json:"vendor"`
-	IsDefault       bool     `json:"isDefault"`
-	MaxInputTokens  int64    `json:"maxInputTokens"`
-	MaxOutputTokens int64    `json:"maxOutputTokens"`
-	MaxAllowedSize  int64    `json:"maxAllowedSize"`
-	Disabled        bool     `json:"disabled"`
-	SupportsImages  bool     `json:"supportsImages"`
-	SupportsReason  bool     `json:"supportsReasoning"`
-	SupportsTool    bool     `json:"supportsToolCall"`
-	OnlyReasoning   bool     `json:"onlyReasoning"`
-	Reasoning       struct {
-		Effort             string   `json:"effort"`
-		Summary            string   `json:"summary"`
-		DefaultEffort      string   `json:"defaultEffort"`
-		CanDisableThinking bool     `json:"canDisableThinking"`
-		SupportedEfforts   []string `json:"supportedEfforts"`
+	// ModelID / Model id мягкий fallback-ключ (только global Резервное использование мульти-конверта каталога,CN каталог
+	// эти два ключа не выдаются; поле добавлено здесь только чтобы typed парсинг может"Видно"них).
+	ModelID string `json:"modelId"`
+	Model string `json:"model"`
+	Description string `json:"descriptionZh"`
+	Credits string `json:"credits"`
+	Tags []string `json:"tags"`
+	Vendor string `json:"vendor"`
+	IsDefault bool `json:"isDefault"`
+	MaxInputTokens int64 `json:"maxInputTokens"`
+	MaxOutputTokens int64 `json:"maxOutputTokens"`
+	MaxAllowedSize int64 `json:"maxAllowedSize"`
+	Disabled bool `json:"disabled"`
+	SupportsImages bool `json:"supportsImages"`
+	SupportsReason bool `json:"supportsReasoning"`
+	SupportsTool bool `json:"supportsToolCall"`
+	OnlyReasoning bool `json:"onlyReasoning"`
+	Reasoning struct {
+		Effort string `json:"effort"`
+		Summary string `json:"summary"`
+		DefaultEffort string `json:"defaultEffort"`
+		CanDisableThinking bool `json:"canDisableThinking"`
+		SupportedEfforts []string `json:"supportedEfforts"`
 	} `json:"reasoning"`
 }
 
-// modelInfo 按解析条目构造 ModelInfo（dynEntry→ModelInfo 映射的单一事实来源）。
-// defaultEffort 新老双键兼容：defaultEffort 优先，缺省回落 effort。
+// modelInfo построить по распарсенным записям ModelInfo（dynEntry→ModelInfo единственный источник истины для маппинга).
+// defaultEffort Совместимость старого и нового ключей:defaultEffort Приоритет, fallback по умолчанию effort。
 func (m dynModelEntry) modelInfo() ModelInfo {
 	def := m.Reasoning.DefaultEffort
 	if def == "" {
 		def = m.Reasoning.Effort
 	}
 	return ModelInfo{
-		ID:                 m.ID,
-		Name:               m.Name,
-		ContextWindow:      m.MaxInputTokens,
-		MaxTokens:          m.MaxOutputTokens,
-		Efforts:            m.Reasoning.SupportedEfforts,
-		DefaultEffort:      def,
-		SupportsImages:     m.SupportsImages,
-		Description:        m.Description,
-		Credits:            m.Credits,
-		Tags:               m.Tags,
-		Vendor:             m.Vendor,
-		IsDefault:          m.IsDefault,
-		SupportsReasoning:  m.SupportsReason,
-		SupportsToolCall:   m.SupportsTool,
-		OnlyReasoning:      m.OnlyReasoning,
-		MaxAllowedSize:     m.MaxAllowedSize,
+		ID: m.ID,
+		Name: m.Name,
+		ContextWindow: m.MaxInputTokens,
+		MaxTokens: m.MaxOutputTokens,
+		Efforts: m.Reasoning.SupportedEfforts,
+		DefaultEffort: def,
+		SupportsImages: m.SupportsImages,
+		Description: m.Description,
+		Credits: m.Credits,
+		Tags: m.Tags,
+		Vendor: m.Vendor,
+		IsDefault: m.IsDefault,
+		SupportsReasoning: m.SupportsReason,
+		SupportsToolCall: m.SupportsTool,
+		OnlyReasoning: m.OnlyReasoning,
+		MaxAllowedSize: m.MaxAllowedSize,
 		CanDisableThinking: m.Reasoning.CanDisableThinking,
-		ReasoningEffort:    m.Reasoning.Effort,
-		ReasoningSummary:   m.Reasoning.Summary,
+		ReasoningEffort: m.Reasoning.Effort,
+		ReasoningSummary: m.Reasoning.Summary,
 	}
 }
 
-// nonChatModel 判定是否非对话模型（应从模型列表过滤掉）。
-// 来源：harness buddy.ts:547-555。三类规则：
-//   - id 前缀 nes-/completion-/codewise-：嵌入/补全/代码专用模型，选了报 code=11102。
-//   - maxOutputTokens ≤ 256：tiny 输出非对话模型。
-//   - tags 含 text-to-image：图片生成模型，非本网关用途。
+// nonChatModel Определить, является ли модель недиалоговой (должна фильтроваться из списка моделей).
+// Источник:harness buddy.ts:547-555。Три типа правил:
+// - id Префикс nes-/completion-/codewise-：Встроить/Автодополнение/Спец-модель для кода, при выборе репортит code=11102。
+// - maxOutputTokens ≤ 256：tiny Вывод — не диалоговая модель.
+// - tags Содержит text-to-image：Модель генерации изображений, не для данного шлюза.
 func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 	id = strings.ToLower(strings.TrimSpace(id))
 	for _, p := range [...]string{"nes-", "completion-", "codewise-"} {
@@ -1201,36 +1201,36 @@ func nonChatModel(id string, maxOutputTokens int64, tags []string) bool {
 	return false
 }
 
-// codeBuddyIDEUA /v3/config 要求能解析出 CodeBuddy 版本号的 UA。
-// CLI 三段式 WorkBuddy UA 会拿到精简目录（flash 输出 128K、无 supportedEfforts）；
-// 官方 IDE 头 `CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0` 才返回完整能力
+// codeBuddyIDEUA /v3/config Требуется возможность распарсить CodeBuddy версии UA。
+// CLI трехсегментный WorkBuddy UA будет получен урезанный каталог (flash Вывод 128K、отсутствует supportedEfforts）；
+// Официальный IDE Заголовок `CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0` только тогда вернуть полный capabilities
 // （flash：393216 + low/high/max）。
-// 版本号需随上游 IDE 发版跟进：UAn 版本过旧时该端点可能同样返回精简目录。
+// версия должна следовать за апстримом IDE Сопровождение релиза:UAn При устаревшей версии эндпоинт может также вернуть урезанный каталог.
 const codeBuddyIDEUA = "CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0"
 
-// codeBuddyCLIUA CLI 三段式 UA。**实测（2026-09-22）该端点对不同 UA 下发的模型集合不同**：
-//   - IDE UA  → 14 条（10 个 chat：含 o4-mini / enhance-1.0 / auto-chat，**无 deepseek 系列**）
-//   - CLI UA  → 22 条（22 个 chat：**含 deepseek-v4.1-flash / deepseek-v4.1-flash-sg /
-//     gpt-6-astra / kimi-k2.8-preview**，但无 o4-mini / enhance-1.0 / auto-chat）
+// codeBuddyCLIUA CLI трехсегментный UA。**фактически (2026-09-22）Данная конечная точка для разных UA выданные наборы моделей различаются**：
+// - IDE UA → 14 записей (10 шт. chat：Содержит o4-mini / enhance-1.0 / auto-chat，**отсутствует deepseek Серия**）
+// - CLI UA → 22 записей (22 шт. chat：**Содержит deepseek-v4.1-flash / deepseek-v4.1-flash-sg /
+// gpt-6-astra / kimi-k2.8-preview**，но без o4-mini / enhance-1.0 / auto-chat）
 //
-// 注意两点，都与旧注释相反，勿再按旧注释推断：
-//  1. 旧注释称「CLI UA 拿到精简目录、IDE UA 才返回完整能力」——实测模型数量恰好相反，
-//     但 **IDE 响应体积更大**（26003B vs 21111B），故「完整能力」应理解为**单条字段更全**，
-//     而非模型更多。两路各有独有模型，缺一不可。
-//  2. 该常量仅用于 global 侧第二路探测；CN 侧仍走 codeBuddyIDEUA 单路。
+// Внимание: два момента противоположны старому комментарию, не делать выводы по старому комментарию:
+// 1. Старый комментарий гласит "CLI UA Получить урезанный каталог,IDE UA только тогда возвращается полный набор возможностей» — фактически количество моделей наоборот,
+// Но **IDE размер ответа больше**（26003B vs 21111B），Поэтому "полные возможности» следует понимать как**Поля одиночной записи полнее**，
+// а не больше моделей. У каждого из двух каналов есть уникальные модели, оба необходимы.
+// 2. Данная константа только для global второй канал детекта на стороне;CN сторона всё ещё идёт codeBuddyIDEUA один канал.
 const codeBuddyCLIUA = "CLI/2.63.2 CodeBuddy/2.63.2"
 
-// FetchModels 调上游动态模型接口（CN 侧；global 账号见 global_models.go 家族）。
+// FetchModels Вызов upstream API динамических моделей (CN сторона;global см. аккаунт global_models.go семейство).
 //
-// v3-config-merge：动态目录 = /v3/config（主，IDE UA 完整能力版）+ 企业端点
-// （/console，cli 面过滤，补缺）的并集，两路**并发**探测。合并去重 key = 模型 id，
-// v3 条目优先（credits 等字段以 v3 为准），企业端点只补 v3 缺失的模型。
-// /v3 失败（400/网络错/解析失败）不拖累企业端点结果——降级为仅企业端点，warn 日志；
-// 反之亦然（两路独立容错）。
+// v3-config-merge：Динамический каталог = /v3/config（основной,IDE UA полнофункциональная версия)+ enterprise-эндпоинт
+// （/console，cli фильтрация по поверхности, дополнение) — объединение, два пути**Конкурентность**Детект. Объединение с дедупликацией key = Модель id，
+// v3 Приоритет записей (credits и др. поля как v3 за основу), enterprise-эндпоинт только дополняет v3 отсутствующая модель.
+// /v3 сбой (400/Ошибка сети/ошибка парсинга) не тянет результат enterprise-эндпоинта — деградация до только enterprise-эндпоинта,warn лог;
+// И наоборот (два независимых отказоустойчивых тракта).
 func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	type probeResult struct {
 		infos []ModelInfo
-		err   error
+		err error
 	}
 	enterpriseCh := make(chan probeResult, 1)
 	v3Ch := make(chan probeResult, 1)
@@ -1245,10 +1245,10 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	enterprise := <-enterpriseCh
 	v3 := <-v3Ch
 	if enterprise.err != nil && v3.err != nil {
-		return nil, enterprise.err // 两路全失败：返回企业端点错误（既有调用方语义零漂移）
+		return nil, enterprise.err // Отказ обоих путей: вернуть ошибку корпоративного эндпоинта (без дрейфа семантики вызывающей стороны)
 	}
 	if v3.err != nil {
-		// /v3 失败降级：不拖累企业端点结果（降级仅企业端点 + warn）。
+		// /v3 деградация при ошибке: не тянет за собой результат enterprise-эндпоинта (деградация только enterprise-эндпоинт + warn）。
 		log.Printf("WARN: [upstream] fetch models: v3/config probe failed (degraded to enterprise endpoint): %v", v3.err)
 	}
 	if enterprise.err != nil {
@@ -1259,8 +1259,8 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("models api returned empty list")
 	}
 	c.storeModelRates(a.Realm(), out)
-	// 刷新 effort 能力缓存（供请求体降级；无 supportedEfforts 的模型不入桶）。
-	// 空桶时跳过写：避免「某探测无档位数据」清掉既有桶。
+	// Обновление effort Кэш capabilities (для деградации тела запроса; без supportedEfforts модель не попадает в бакет).
+	// При пустом бакете пропуск записи: чтобы "отсутствие данных тарифа в пробе» не очистило существующий бакет.
 	cache := make(map[string][]string, len(out))
 	defCache := make(map[string]string, len(out))
 	for _, mi := range out {
@@ -1274,15 +1274,15 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	if len(cache) == 0 && len(defCache) == 0 {
 		return out, nil
 	}
-	// 按探测账号的 realm 写入对应桶：CN 探测只进 cn 桶，global 同模型名不被污染（C-2）。
+	// По аккаунту зондирования realm запись в соответствующий бакет:CN проба только на вход cn бакет,global То же имя модели не загрязняется (C-2）。
 	c.storeEfforts(a.Realm(), cache, defCache)
 	return out, nil
 }
 
-// mergeModelInfos 合并两路模型目录：primary 为主（同 id 以 primary 条目为准——
-// credits 等字段以主端点为权威），secondary 只补 primary 缺失的 id。
-// 去重 key = 模型 id；输出顺序 = primary 原序在前、secondary 补充项（secondary 原序）
-// 在后——稳定输出，不依赖 map 迭代序。
+// mergeModelInfos объединение двух каталогов моделей:primary преимущественно (аналог. id по primary эталон — записи —
+// credits и т.п. поля — авторитетен главный эндпоинт),secondary только дополнить primary отсутствующий id。
+// дедупликация key = Модель id；порядок вывода = primary Исходный порядок впереди,secondary Дополнительные поля (secondary исходный порядок)
+// после — стабильный вывод, не зависит от map Порядок итерации.
 func mergeModelInfos(primary, secondary []ModelInfo) []ModelInfo {
 	if len(secondary) == 0 {
 		return primary
@@ -1306,17 +1306,17 @@ func mergeModelInfos(primary, secondary []ModelInfo) []ModelInfo {
 	return out
 }
 
-// fetchEnterpriseModels 单路探测企业模型端点（/console/enterprises/personal/models）。
-// 解析口径：agents[cli].models 过滤 + nonChatModel 剔除 + disabled 剔除。
+// fetchEnterpriseModels одноканальный проб enterprise-эндпоинта модели (/console/enterprises/personal/models）。
+// Правила парсинга:agents[cli].models Фильтрация + nonChatModel исключить + disabled Исключить.
 func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
-	// 局部变量名避开 url（本包已 import net/url，同名会造成阅读混淆）。
+	// избегать имени локальной переменной url（Данный пакет уже import net/url，одноимённость вызовет путаницу при чтении).
 	endpoint := c.chatBase(a) + "/console/enterprises/personal/models"
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	c.CommonHeaders(req, a) // 复用共享请求头（Origin/Referer/UA/Accept/Content-Type）
-	// AccessToken 加锁快照（见 auth.AccessTokenValue：keepalive 刷新在 a.mu 内改写）。
+	c.CommonHeaders(req, a) // Переиспользование общих заголовков запроса (Origin/Referer/UA/Accept/Content-Type）
+	// AccessToken Снапшот под блокировкой (см. auth.AccessTokenValue：keepalive обновление в a.mu перезапись внутри).
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -1325,7 +1325,7 @@ func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		// 读失败 → 传输层错误（handler 侧该路径不 NoteError）。
+		// Ошибка чтения → ошибка транспортного уровня (handler на стороне этот путь не NoteError）。
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -1336,7 +1336,7 @@ func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
 		Data struct {
 			Models []dynModelEntry `json:"models"`
 			Agents []struct {
-				Name   string   `json:"name"`
+				Name string `json:"name"`
 				Models []string `json:"models"`
 			} `json:"agents"`
 		} `json:"data"`
@@ -1357,9 +1357,9 @@ func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
 	if len(cliIDs) == 0 {
 		return nil, fmt.Errorf("no cli agent models found")
 	}
-	// dynMap 收集模型字段；nonChatModel 过滤在写入 dynMap 前执行，
-	// 确保非对话条目（nes-/completion-/codewise- 前缀、maxOutputTokens≤256、
-	// tags 含 text-to-image）根本不进返回列表（来源：harness buddy.ts:547-555）。
+	// dynMap сбор полей модели;nonChatModel фильтрация при записи dynMap выполнить до,
+	// убедиться, что недиалоговые записи (nes-/completion-/codewise- Префикс,maxOutputTokens≤256、
+	// tags Содержит text-to-image）Вообще не попадает в список возврата (источник:harness buddy.ts:547-555）。
 	dynMap := make(map[string]dynModelEntry, len(env.Data.Models))
 	for _, m := range env.Data.Models {
 		if nonChatModel(m.ID, m.MaxOutputTokens, m.Tags) {
@@ -1379,10 +1379,10 @@ func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
 	return out, nil
 }
 
-// fetchV3Models 单路探测 /v3/config（IDE UA 完整能力版，见 codeBuddyIDEUA）。
-// v3 面取全量 models（不按 agents[cli] 过滤，与 global 探测口径一致），按同一
-// nonChatModel 规则剔除非对话条目（selected 会选模型报 code=11102）。
-// 失败返回错误（调用方降级为仅企业端点）。
+// fetchV3Models Одноканальный пробник /v3/config（IDE UA полная версия с возможностями, см. codeBuddyIDEUA）。
+// v3 брать полный объём на стороне models（Не по agents[cli] Фильтрация, и global единый критерий пробы), по тому же
+// nonChatModel правило отсеивает недиалоговые записи (selected выберет модель — отчет code=11102）。
+// При ошибке вернуть ошибку (вызывающая сторона деградирует до только enterprise-эндпоинта).
 func (c *Client) fetchV3Models(a *auth.Auth) ([]ModelInfo, error) {
 	byID, err := c.fetchV3ConfigModelMap(a, codeBuddyIDEUA)
 	if err != nil {
@@ -1401,20 +1401,20 @@ func (c *Client) fetchV3Models(a *auth.Auth) ([]ModelInfo, error) {
 	return out, nil
 }
 
-// v3ModelPromotion /v3/config data.modelPromotions 单条优惠定义（2026-09-23 实测
-// 7 条：deepseek 系错峰五折、glm-5.2 夜间五折、hy3 与 hy4-preview-f 限时免费）。
-// discount 只在部分条目上存在：有 factor 的可算生效价；「错峰使用」类只有时段
-// 文案（factor 藏在 hover 文本里，无机器可读值），仅透出标签与说明。
+// v3ModelPromotion /v3/config data.modelPromotions Определение одиночной скидки (2026-09-23 На практике
+// 7 записей:deepseek система скидки 50% вне пика,glm-5.2 ночная скидка 50%,hy3 и hy4-preview-f Ограниченное время бесплатно).
+// discount присутствует только в части записей: есть factor считается действующей ценой; тип "использование вне пика» — только слот
+// Текст (factor Скрыто в hover в тексте, без машиночитаемого значения), отдаются только метка и описание.
 type v3ModelPromotion struct {
-	Enabled  bool     `json:"enabled"`
-	Priority int      `json:"priority"`
+	Enabled bool `json:"enabled"`
+	Priority int `json:"priority"`
 	ModelIDs []string `json:"modelIds"`
-	Badge    *struct {
+	Badge *struct {
 		Label string `json:"label"`
 	} `json:"badge"`
 	Discount *struct {
-		DiscountedCredits string  `json:"discountedCredits"`
-		Factor            float64 `json:"factor"`
+		DiscountedCredits string `json:"discountedCredits"`
+		Factor float64 `json:"factor"`
 	} `json:"discount"`
 	Hover *struct {
 		TextZh string `json:"textZh"`
@@ -1422,19 +1422,19 @@ type v3ModelPromotion struct {
 	Schedule *struct {
 		Daily []struct {
 			Start string `json:"start"` // "23:00"
-			End   string `json:"end"`   // "7:50"（可跨午夜）
+			End string `json:"end"` // »7:50"（может пересекать полночь)
 		} `json:"daily"`
-		Timezone   string `json:"timezone"`  // 实测恒 Asia/Shanghai
-		ValidFrom  string `json:"validFrom"` // RFC3339，可缺省
+		Timezone string `json:"timezone"` // На практике всегда Asia/Shanghai
+		ValidFrom string `json:"validFrom"` // RFC3339，Может опускаться
 		ValidUntil string `json:"validUntil"`
 	} `json:"schedule"`
 }
 
-// promoZone 优惠时区：上游恒 Asia/Shanghai（UTC+8 无夏令时），用 FixedZone 免依赖
-// 系统 tzdata（Windows 无 IANA 库时 LoadLocation 会失败）。
+// promoZone льготная таймзона: upstream всегда Asia/Shanghai（UTC+8 без летнего времени), использовать FixedZone Без зависимостей
+// Система tzdata（Windows отсутствует IANA при библиотеке LoadLocation будет сбой).
 var promoZone = time.FixedZone("CST", 8*3600)
 
-// promoClock 解析 "HH:MM" 为当日分钟数；坏值返回 (-1, false)。
+// promoClock Парсинг "HH:MM" — минуты текущих суток; при невалидном значении вернуть (-1, false)。
 func promoClock(hhmm string) (int, bool) {
 	parts := strings.Split(hhmm, ":")
 	if len(parts) != 2 {
@@ -1448,8 +1448,8 @@ func promoClock(hhmm string) (int, bool) {
 	return h*60 + m, true
 }
 
-// promoActive 评估优惠在 now 是否生效：enabled + validFrom/validUntil 内 + 落在
-// 任一 daily 窗口（支持跨午夜，如 23:00→7:50）。schedule 为 nil 视为全天生效。
+// promoActive оценка скидки в now вступило ли в силу:enabled + validFrom/validUntil Внутри + попадает в
+// Любой daily Окно (с поддержкой через полночь, напр. 23:00→7:50）。schedule для nil считается действующим весь день.
 func promoActive(p *v3ModelPromotion, now time.Time) bool {
 	if !p.Enabled {
 		return false
@@ -1481,7 +1481,7 @@ func promoActive(p *v3ModelPromotion, now time.Time) bool {
 						inWindow = true
 						break
 					}
-				} else if cur >= st || cur < ed { // 跨午夜（23:00→7:50）
+				} else if cur >= st || cur < ed { // Через полночь (23:00→7:50）
 					inWindow = true
 					break
 				}
@@ -1494,9 +1494,9 @@ func promoActive(p *v3ModelPromotion, now time.Time) bool {
 	return true
 }
 
-// applyModelPromotions 把当前生效的优惠挂到目录条目：同模型多条命中取 priority
-// 最高（实测 glm-5.2 白天 badge-only(50) 与夜间五折(100) 靠 priority+daily 双轨
-// 切换）。无 discount 对象的条目也挂标签/说明（错峰类），PromoFactor 留 nil。
+// applyModelPromotions Привязать текущую активную скидку к элементу каталога: при множественном попадании одной модели брать priority
+// Максимум (фактически glm-5.2 дневное время badge-only(50) и ночная скидка 50%(100) привязка priority+daily Двухтрековый
+// переключение). Отсутствует discount Записи объекта также помечаются тегом/Описание (тип со сдвигом нагрузки),PromoFactor Сохранить nil。
 func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 	if len(promos) == 0 || len(out) == 0 {
 		return
@@ -1504,7 +1504,7 @@ func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 	now := time.Now().In(promoZone)
 	type cand struct {
 		prio int
-		p    *v3ModelPromotion
+		p *v3ModelPromotion
 	}
 	best := map[string]cand{}
 	for i := range promos {
@@ -1514,7 +1514,7 @@ func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 		}
 		for _, id := range p.ModelIDs {
 			if _, ok := out[id]; !ok {
-				continue // 目录外模型（如同名 global 变体）不挂
+				continue // модель вне каталога (напр. одноименная global вариант) не монтировать
 			}
 			if b, seen := best[id]; !seen || p.Priority > b.prio {
 				best[id] = cand{prio: p.Priority, p: p}
@@ -1538,10 +1538,10 @@ func applyModelPromotions(out map[string]ModelInfo, promos []v3ModelPromotion) {
 	}
 }
 
-// storeEfforts 按 realm 写入 effort 能力缓存桶（efforts + defaultEfforts），并发安全。
-// 供 CN FetchModels 与 global 探测共用：拉取到的模型档位落桶后，出站请求体
-// normalizeReasoningEffort 才能按域降级。efforts 与 defs 均空时删除该 realm 桶
-// （等价「该域无可降级档位」）。调用方负责在「无新数据」时跳过写。
+// storeEfforts Нажать realm запись effort бакет кэша capabilities (efforts + defaultEfforts），Потокобезопасность.
+// Подача CN FetchModels и global Общий проб: после попадания полученного тира модели в бакет тело исходящего запроса
+// normalizeReasoningEffort только тогда даунгрейд по домену.efforts и defs при пустоте всего удалить данный realm Бакет
+// （эквивалентно "для этого домена нет уровня для даунгрейда»). Вызывающая сторона пропускает запись при "нет новых данных».
 func (c *Client) storeEfforts(realm string, efforts map[string][]string, defs map[string]string) {
 	c.effortsMu.Lock()
 	defer c.effortsMu.Unlock()
@@ -1561,9 +1561,9 @@ func (c *Client) storeEfforts(realm string, efforts map[string][]string, defs ma
 	c.defaultEfforts[k] = defs
 }
 
-// normalizeModelRate 把上游倍率原文规范化为可比较的数值键。
-// 兼容 "x0.05" / "x0.05 credits" / "0.50x" 等形态；无法数值化时保留去除
-// credits 后缀与空白后的原文，避免编造倍率。
+// normalizeModelRate нормализовать исходный текст множителя апстрима в сравнимый числовой ключ.
+// совместимость "x0.05« / "x0.05 credits« / "0.50x« и т.п.; при невозможности числовой конвертации оставить после удаления
+// credits Оригинал после суффикса и пробела, не выдумывать коэффициент.
 func normalizeModelRate(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -1587,8 +1587,8 @@ func normalizeModelRate(raw string) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
-// effectiveModelRate 返回模型当前生效倍率：有机器可读优惠时取折扣价，
-// 否则取牌价；两者均缺省时为空。
+// effectiveModelRate возвращает действующий множитель модели: при наличии машиночитаемой скидки берётся цена со скидкой,
+// иначе брать прайс; если оба отсутствуют — пусто.
 func effectiveModelRate(mi ModelInfo) string {
 	if mi.PromoFactor != nil && strings.TrimSpace(mi.PromoCredits) != "" {
 		return normalizeModelRate(mi.PromoCredits)
@@ -1596,8 +1596,8 @@ func effectiveModelRate(mi ModelInfo) string {
 	return normalizeModelRate(mi.Credits)
 }
 
-// storeModelRates 按 realm 整体替换模型倍率快照。目录成功刷新但没有可解析
-// 倍率时写入空桶，使旧倍率不会继续冒充当前价。
+// storeModelRates Нажать realm полная замена снапшота коэффициентов модели. Каталог успешно обновлён, но нет парсируемых
+// при множителе записать пустой бакет, чтобы старый множитель не выдавал себя за текущую цену.
 func (c *Client) storeModelRates(realm string, infos []ModelInfo) {
 	rates := make(map[string]string, len(infos))
 	for _, mi := range infos {
@@ -1616,7 +1616,7 @@ func (c *Client) storeModelRates(realm string, infos []ModelInfo) {
 	c.modelRates[realmKey(realm)] = rates
 }
 
-// ModelRate 返回最近成功刷新的指定域模型生效倍率；未知返回空串。
+// ModelRate возвращает актуальный коэффициент указанной доменной модели из последнего успешного обновления; если неизвестно — пустая строка.
 func (c *Client) ModelRate(realm, model string) string {
 	if c == nil || model == "" {
 		return ""
@@ -1626,17 +1626,17 @@ func (c *Client) ModelRate(realm, model string) string {
 	return c.modelRates[realmKey(realm)][model]
 }
 
-// GlobalEffortSnapshot 导出 global 域 effort 能力缓存（探测下发 ∪ 静态兜底合并后的桶），
-// 供 /v1/models 输出 reasoning_supported_efforts / reasoning_default_effort。
-// 返回副本；桶未填充（无 global 账号或从未探测）→ nil（调用方回落静态兜底表）。
+// GlobalEffortSnapshot Экспорт global Домен effort Кэш capabilities (зондирование/рассылка ∪ бакет после статического фолбэк-мерджа),
+// Подача /v1/models Вывод reasoning_supported_efforts / reasoning_default_effort。
+// Возвращает копию; бакет не заполнен (нет global аккаунт или никогда не зондировался)→ nil（откат вызывающей стороны к статической резервной таблице).
 func (c *Client) GlobalEffortSnapshot() (efforts map[string][]string, defaults map[string]string) {
 	return c.effortsSnapshot("global"), c.defaultEffortsSnapshot("global")
 }
 
-// v3ConfigDomain /v3/config 的 X-Domain：优先账号落盘 domain，否则 chatBase host。
+// v3ConfigDomain /v3/config X-Domain：Приоритетная запись аккаунта на диск domain，Иначе chatBase host。
 func v3ConfigDomain(a *auth.Auth, chatBase string) string {
 	if a != nil {
-		// Domain 加锁快照（见 auth.DomainValue：keepalive 刷新在 a.mu 内改写）。
+		// Domain Снапшот под блокировкой (см. auth.DomainValue：keepalive обновление в a.mu перезапись внутри).
 		if d := strings.TrimSpace(a.DomainValue()); d != "" {
 			d = strings.TrimPrefix(d, "https://")
 			d = strings.TrimPrefix(d, "http://")
@@ -1649,10 +1649,10 @@ func v3ConfigDomain(a *auth.Auth, chatBase string) string {
 	return "copilot.tencent.com"
 }
 
-// fetchV3ConfigModelMap 拉官方 IDE 配置目录，按模型 id 建能力表。
-// 该端点对 UA 敏感：必须带 CodeBuddy/CodeBuddyIDE 版本，否则 400 code=12403。
-// ua 为该次请求的 User-Agent；空串等价 codeBuddyIDEUA。该端点对 UA 敏感且**不同 UA 下发
-// 不同模型集合**（见 codeBuddyCLIUA 注释），global 探测据此并发两路取并集。
+// fetchV3ConfigModelMap Запросить с апстрима IDE Каталог конфигурации, по модели id Построение таблицы возможностей.
+// Этот эндпоинт для UA чувствительный: обязательно передавать CodeBuddy/CodeBuddyIDE версия, иначе 400 code=12403。
+// ua для данного запроса User-Agent；пустая строка эквивалентна codeBuddyIDEUA。Этот эндпоинт для UA Чувствительный и**Разное UA выдача
+// Разные наборы моделей**（См. codeBuddyCLIUA комментарий),global Зондирование на основе этого параллельно берет объединение двух путей.
 func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]ModelInfo, error) {
 	req, err := http.NewRequest(http.MethodGet, c.chatBase(a)+"/v3/config", nil)
 	if err != nil {
@@ -1660,7 +1660,7 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 	}
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	// AccessToken 加锁快照（同 fetchEnterpriseModels）。
+	// AccessToken снапшот под локом (тот же fetchEnterpriseModels）。
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	if a != nil && a.UID != "" {
 		req.Header.Set("X-User-Id", a.UID)
@@ -1679,7 +1679,7 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
-		// 读失败 → 传输层错误：半截 body 不进解析（不罚号）。
+		// Ошибка чтения → Ошибка транспортного уровня: оборванный body Не входит в парсинг (без штрафа для номера).
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -1689,13 +1689,13 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 		Code int `json:"code"`
 		Data struct {
 			Models []dynModelEntry `json:"models"`
-			// 试用模型横幅：上游把「N 天免费试用」的模型放在这里，**不在 data.models 里**。
-			// 实测 global 侧 hy4-preview-f 只出现在此（modelId=hy4-preview-f、
-			// targetModelId=hy4-preview、trialDays=14），纯 data.models 解析会漏掉它。
+			// Баннер пробной модели: апстрим "N модели "дней бесплатного пробного периода» размещаются здесь,**не в data.models внутри**。
+			// На практике global Боковой hy4-preview-f Встречается только здесь (modelId=hy4-preview-f、
+			// targetModelId=hy4-preview、trialDays=14），Чистый data.models парсер его пропустит.
 			ProductFeaturesConfig struct {
 				ModelTrialBanner struct {
 					Banners []struct {
-						ModelID       string `json:"modelId"`
+						ModelID string `json:"modelId"`
 						TargetModelID string `json:"targetModelId"`
 					} `json:"banners"`
 				} `json:"ModelTrialBanner"`
@@ -1716,16 +1716,16 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 		}
 		out[m.ID] = m.modelInfo()
 	}
-	// 补入试用横幅模型（ModelTrialBanner）：上游把「N 天免费试用」的模型只放在这里，
-	// data.models 里没有，故纯目录解析会漏（实测 global 侧 hy4-preview-f 即如此，
-	// 但该模型**实际可调用**）。
+	// добавить trial-баннер модели (ModelTrialBanner）：Апстрим превращает "N модели "N-дневного бесплатного триала» только здесь,
+	// data.models внутри нет, поэтому чисто каталоговый парсинг пропустит (фактически global Боковой hy4-preview-f Если так,
+	// Но данная модель**Фактически вызываемый**）。
 	//
-	// 元数据口径：能力字段（context/maxTokens/efforts/reasoning 等）从 targetModelId
-	// 的既有条目继承——试用版与其转正目标是同族模型，能力应当一致；
-	// 但 **Credits 与 Tags 显式清空**——它们描述的是"转正后"的计费与营销信息
-	// （如 hy4-preview 的 x0.29 与 badge），用在免费试用版上会误导下游展示。
+	// Метрика метаданных: поле capabilities (context/maxTokens/efforts/reasoning и т.д.) из targetModelId
+	// наследование существующих записей — триал и его целевой релиз — модели одного семейства, возможности должны совпадать;
+	// Но **Credits и Tags Явная очистка**——Они описывают«После подтверждения«платежная и маркетинговая информация
+	// （Например hy4-preview x0.29 и badge），Использование на бесплатном триале введёт в заблуждение отображение ниже по потоку.
 	//
-	// firstUseTimeKey / trialDays 属**账号级**试用状态，不透出给下游。
+	// firstUseTimeKey / trialDays Атрибут**Уровень аккаунта**Пробный статус, не прокидывается downstream.
 	for _, b := range env.Data.ProductFeaturesConfig.ModelTrialBanner.Banners {
 		id := strings.TrimSpace(b.ModelID)
 		if id == "" {
@@ -1745,9 +1745,9 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 		mi.Tags = nil
 		out[id] = mi
 	}
-	// 挂当前生效的限时优惠（modelPromotions）：Credits 字段是**牌价**（转正后基准
-	// 倍率，如 hy4-preview-f 的 x0.29），而 WorkBuddy 客户端显示的是生效价（试用/
-	// 折扣窗口内 factor 打折）——面板据此展示「生效价 + 标签 + 牌价」。
+	// подвешена текущая действующая лимитированная акция (modelPromotions）：Credits поле —**Курс**（Базис после штатного ввода
+	// коэффициент, напр. hy4-preview-f x0.29），И WorkBuddy Клиент отображает действующую цену (пробная/
+	// В окне скидки factor Скидка) — панель отображает на основе этого "действующую цену + Тег + курс».
 	applyModelPromotions(out, env.Data.ModelPromotions)
 
 	if len(out) == 0 {
@@ -1756,78 +1756,78 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 	return out, nil
 }
 
-// UserResource 查询账号积分余额与总额度（所有套餐聚合）。remain 负值钳 0；
-// total 取与 remain 同源的额度字段（CycleCapacitySize 优先，无周期额度退
-// CapacitySize），上游缺 size 的套餐按 remain 兜底，保证百分比不超 100%。
-// CreditPackage 单个积分包的构成明细（面板「积分构成」用）。
+// UserResource Запрос баланса баллов и общего лимита аккаунта (агрегация всех тарифов).remain кламп отрицательных значений 0；
+// total взять и remain Поле лимита из того же источника (CycleCapacitySize приоритет, без возврата квоты периода
+// CapacitySize），Отсутствует апстрим size тариф по remain фолбэк, гарантия непревышения процента 100%。
+// CreditPackage Детализация состава одного пакета баллов (для панели "Состав баллов»).
 //
-// 两个账号即使任务完成度完全一致，余额也可能相差上千——差别藏在包的**面额与
-// 来源**里（「国内运营裂变包」「拉新权益包」按次发放，面额 6~1500 不等）。
-// 只看聚合值看不出这件事，所以把逐包明细暴露出来。
+// Даже при одинаковом прогрессе заданий баланс двух аккаунтов может отличаться на тысячи — разница кроется в пакетах**номинал и
+// Источник**в ("Пакет вирального роста для внутреннего рынка» "Пакет привлечения новых» выдаются поштучно, номинал 6~1500 не равно).
+// По агрегированному значению это не видно, поэтому выводим детализацию по пакетам.
 type CreditPackage struct {
-	Name   string `json:"name"`
-	Remain int64  `json:"remain"`
-	Used   int64  `json:"used"`
-	Size   int64  `json:"size"`
-	// EndTime 该包的周期结束时间（上游 ExpiredTime / PackageEndTime / CycleEndTime
-	// 按优先级取首个有值字段）。
+	Name string `json:"name"`
+	Remain int64 `json:"remain"`
+	Used int64 `json:"used"`
+	Size int64 `json:"size"`
+	// EndTime Время окончания периода пакета (апстрим ExpiredTime / PackageEndTime / CycleEndTime
+	// взять первое непустое поле по приоритету).
 	EndTime string `json:"end_time,omitempty"`
-	// ExpiresAt 与 EndTime 同源的 Unix 毫秒时间戳，供面板按精确剩余天数聚合。
+	// ExpiresAt и EndTime Одноисточниковый Unix Метка времени в мс для агрегации на панели по точным оставшимся дням.
 	ExpiresAt int64 `json:"expires_at,omitempty"`
-	// CreatedAt 发放时刻，RFC3339。**这是区分「首登赠送」与「活动奖励」的唯一依据**：
-	// 两类包的 PackageName 与 PackageCode 完全相同（例如都是「国内运营裂变包」+
-	// TCACA_code_007_*），只看名字无法区分，只有时间能说明它是不是账号首次授权那刻发的。
+	// CreatedAt Момент выдачи,RFC3339。**Единственный критерий различия "подарка за первый вход» и "награды за активность»**：
+	// двух типов пакетов PackageName и PackageCode полностью идентичны (например, оба "пакет вирального роста для внутреннего рынка»+
+	// TCACA_code_007_*），по имени не различить, только время показывает, было ли отправлено в момент первой авторизации аккаунта.
 	CreatedAt string `json:"created_at,omitempty"`
-	// PackageCode / SubProductCode 上游的包类型标识。同 Name 不同 Code 的包可能
-	// 是不同来源；同 Code 不同面额则是同来源分批发放（首登 1500 与活动 300 即如此）。
-	PackageCode    string `json:"package_code,omitempty"`
+	// PackageCode / SubProductCode Идентификатор типа пакета апстрима. То же Name Разное Code пакет может
+	// — разные источники; одинаковый Code разные номиналы — поэтапная выдача из одного источника (первый вход 1500 И активность 300 именно так).
+	PackageCode string `json:"package_code,omitempty"`
 	SubProductCode string `json:"sub_product_code,omitempty"`
 	SubProductName string `json:"sub_product_name,omitempty"`
-	// Cycle 为 true 表示按周期发放的包（读 Cycle* 字段），否则读 Capacity*。
+	// Cycle для true Пакет периодической выдачи (чтение Cycle* поле), иначе читать Capacity*。
 	Cycle bool `json:"cycle,omitempty"`
 }
 
-// CreditPackages 返回账号当前的逐包构成。remain/size 为各包求和。
+// CreditPackages Возвращает текущий попакетный состав аккаунта.remain/size суммирование по пакетам.
 //
-// 字段选择与 UserResourceDetailed 的聚合口径一致：CycleCapacitySize > 0 时按
-// 周期字段算，否则按 Capacity 字段算——两条路径不能混，否则同一个包会被算两次。
+// выбор полей и UserResourceDetailed Единый критерий агрегации:CycleCapacitySize > 0 При ... по
+// расчет по полю периода, иначе по Capacity подсчёт по полю — два пути нельзя смешивать, иначе один пакет будет учтён дважды.
 func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, error) {
 	now := time.Now()
 	body := map[string]any{
-		"PageNumber":               1,
-		"PageSize":                 100,
-		"ProductCode":              "p_tcaca",
-		"Status":                   []int{0, 3},
+		"PageNumber": 1,
+		"PageSize": 100,
+		"ProductCode": "p_tcaca",
+		"Status": []int{0, 3},
 		"PackageEndTimeRangeBegin": now.Format(packageEndLayout),
-		"PackageEndTimeRangeEnd":   now.Add(365 * 101 * 24 * time.Hour).Format(packageEndLayout),
+		"PackageEndTimeRangeEnd": now.Add(365 * 101 * 24 * time.Hour).Format(packageEndLayout),
 	}
 	data, err := c.billingMeterJSON(a, c.billingMeterPaths(a), http.MethodPost, body)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	// 注意层级：doJSON 已经解过 apiEnvelope 并返回 env.Data，所以这里从
-	// Response 开始解析——**不能**再套一层 Code/Data，否则 Accounts 恒为空，
-	// 表现为「每个号都 0 个包」（实测踩过）。
+	// внимание на уровень:doJSON уже расшифровано apiEnvelope и вернуть env.Data，поэтому здесь с
+	// Response Начать разбор —**нельзя**обернуть ещё одним слоем Code/Data，Иначе Accounts Всегда пусто,
+	// проявляется как "каждый номер» 0 пакетов» (на практике наступали).
 	var resp struct {
 		Response struct {
 			Data struct {
 				Accounts []struct {
-					PackageName         string `json:"PackageName"`
-					CapacityRemain      int64  `json:"CapacityRemain"`
-					CapacityUsed        int64  `json:"CapacityUsed"`
-					CapacitySize        int64  `json:"CapacitySize"`
-					CycleCapacityRemain int64  `json:"CycleCapacityRemain"`
-					CycleCapacityUsed   int64  `json:"CycleCapacityUsed"`
-					CycleCapacitySize   int64  `json:"CycleCapacitySize"`
-					// 到期时间字段名在上游存在三种口径：ExpiredTime / PackageEndTime
-					// 在 CN/global 实测字段全集里均恒 miss（见 UserResourceDetailed
-					// 处注释），真实下发的是 CycleEndTime——三者都读，谁有值用谁。
-					ExpiredTime    string `json:"ExpiredTime"`
+					PackageName string `json:"PackageName"`
+					CapacityRemain int64 `json:"CapacityRemain"`
+					CapacityUsed int64 `json:"CapacityUsed"`
+					CapacitySize int64 `json:"CapacitySize"`
+					CycleCapacityRemain int64 `json:"CycleCapacityRemain"`
+					CycleCapacityUsed int64 `json:"CycleCapacityUsed"`
+					CycleCapacitySize int64 `json:"CycleCapacitySize"`
+					// Имя поля срока действия в апстриме имеет три варианта:ExpiredTime / PackageEndTime
+					// В CN/global В полном наборе фактически измеренных полей всегда константа miss（См. UserResourceDetailed
+					// комментарий в месте), фактически выдаётся CycleEndTime——читаются все три, используется тот, где есть значение.
+					ExpiredTime string `json:"ExpiredTime"`
 					PackageEndTime string `json:"PackageEndTime"`
-					CycleEndTime   string `json:"CycleEndTime"`
-					// 发放时刻（epoch 毫秒）。
-					CreateTime     int64  `json:"CreateTime"`
-					PackageCode    string `json:"PackageCode"`
+					CycleEndTime string `json:"CycleEndTime"`
+					// момент выдачи (epoch мс).
+					CreateTime int64 `json:"CreateTime"`
+					PackageCode string `json:"PackageCode"`
 					SubProductCode string `json:"SubProductCode"`
 					SubProductName string `json:"SubProductName"`
 				} `json:"Accounts"`
@@ -1842,8 +1842,8 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 	var sumRemain, sumSize int64
 	for _, p := range packs {
 		cp := CreditPackage{
-			Name:           p.PackageName,
-			PackageCode:    p.PackageCode,
+			Name: p.PackageName,
+			PackageCode: p.PackageCode,
 			SubProductCode: p.SubProductCode,
 			SubProductName: p.SubProductName,
 		}
@@ -1860,7 +1860,7 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 				cp.ExpiresAt = end.UnixMilli()
 			}
 		}
-		// CreateTime 是 epoch 毫秒；0 表示上游没给，留空而不是伪造 1970。
+		// CreateTime Да epoch мс;0 означает, что апстрим не передал, оставить пустым, а не подделывать 1970。
 		if p.CreateTime > 0 {
 			cp.CreatedAt = time.UnixMilli(p.CreateTime).Format(time.RFC3339)
 		}
@@ -1885,7 +1885,7 @@ func (c *Client) CreditPackages(a *auth.Auth) ([]CreditPackage, int64, int64, er
 		sumSize += cp.Size
 		out = append(out, cp)
 	}
-	// 面额降序：大包一眼可见，正是差异最可能出现的地方。
+	// сортировка по номиналу по убыванию: крупные пакеты видны сразу — именно там вероятнее расхождения.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Size > out[j].Size })
 	return out, sumRemain, sumSize, nil
 }
@@ -1895,11 +1895,11 @@ func (c *Client) UserResource(a *auth.Auth) (remain, total int64, err error) {
 	return remain, total, err
 }
 
-// packageEndLayout 上游套餐到期时间的墙钟格式（UTC+8，与 softRateResetLoc 同口径）。
+// packageEndLayout Формат wall-clock истечения тарифа апстрима (UTC+8，и softRateResetLoc в той же метрике).
 const packageEndLayout = "2006-01-02 15:04:05"
 
-// parsePackageEndTime 统一解析上游套餐到期时间。空值、格式异常返回 false，
-// 调用方据此保守地不把该包计入最早到期路由。
+// parsePackageEndTime Единый парсинг времени истечения тарифа апстрима. Пустое значение, ошибка формата — возврат false，
+// Вызывающая сторона консервативно не включает этот пакет в маршрут с самым ранним истечением.
 func parsePackageEndTime(raw string) (time.Time, bool) {
 	if raw == "" {
 		return time.Time{}, false
@@ -1911,38 +1911,38 @@ func parsePackageEndTime(raw string) (time.Time, bool) {
 	return t, true
 }
 
-// UserResourceDetailed 在 UserResource 基础上额外返回「快过期」积分子集：
-// soon > 0 且套餐 CycleEndTime 解析成功且到期时刻 ≤ now+soon 的余额计入 expiring
-// （pool 据此优先消耗，避免官方活动赠送的奖励积分到期作废）；soon ≤ 0 时 expiring
-// 恒 0（禁用分桶，行为与引入前一致）。expiring 是 remain 的一部分。
+// UserResourceDetailed В UserResource дополнительно вернуть подмножество баллов "скоро истекает»:
+// soon > 0 и тариф CycleEndTime Парсинг успешен и момент истечения ≤ now+soon баланс зачисляется в expiring
+// （pool приоритетное списание по этому признаку, чтобы бонусные баллы за официальные акции не сгорели);soon ≤ 0 Время expiring
+// Конст. 0（бакетинг отключен, поведение как до внедрения).expiring Да remain часть.
 //
-// 到期时间判据是 CycleEndTime（上游实测：CN/global 两域字段全集均无 PackageEndTime，
-// 旧判据恒 miss 致 expiring 恒 0；CycleEndTime 是上游真实下发的到期时刻——
-// global Bonus Pack 14 天赠送积分的到期时间即此字段）。解析失败/缺失的套餐保守
-// 不计入 expiring（不误标为快过期而插队）。
-// 单套餐取数统一调 packageRemainUsed（与 CreditPackages 同一事实来源，含 remain
-// 钳 [0,size] 与 used 修正；消除双份逻辑漂移——旧中间 switch 只钳负值，上游脏数据
-// CycleRemain>Size 时会高估）。
+// критерий времени истечения — CycleEndTime（Факт апстрима:CN/global Во всех полях обоих доменов отсутствует PackageEndTime，
+// Старый критерий всегда miss Вызвать expiring Конст. 0；CycleEndTime — реальное время истечения, выданное апстримом —
+// global Bonus Pack 14 срок истечения подарочных баллов за дни — это поле). Ошибка парсинга/отсутствующий тариф — консервативно
+// Не учитывается expiring（чтобы ошибочно не пометить как скоро истекающее и не поднять в очереди).
+// получение данных одного пакета — единый вызов packageRemainUsed（и CreditPackages единый источник истины, включая remain
+// Зажим [0,size] и used Исправление; устранение дрейфа дублирующей логики — старый промежуточный switch Клампить только отрицательные, грязные данные upstream
+// CycleRemain>Size будет завышено).
 func (c *Client) UserResourceDetailed(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, err error) {
 	remain, total, expiring, _, _, err = c.UserResourceDetailedWithExpiry(a, soon)
 	return remain, total, expiring, err
 }
 
-// UserResourceDetailedWithExpiry 在 UserResourceDetailed 基础上返回最早未来到期批次：
-// earliestAt 是最早的可用到期时刻，earliestRemaining 是同一时刻所有正余额包的剩余量之和。
-// 已过期、剩余为 0、缺少或无法解析到期时间的包都不会成为最早批次；无有效批次时返回零值。
+// UserResourceDetailedWithExpiry В UserResourceDetailed на этой основе вернуть ближайшую будущую партию с истечением:
+// earliestAt это самый ранний доступный момент истечения,earliestRemaining Сумма остатков всех пакетов с положительным балансом на один момент времени.
+// уже истёк, остаток — 0、Пакеты без срока годности или с непарсируемым сроком не считаются самой ранней партией; при отсутствии валидных партий возвращается ноль.
 func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, err error) {
 	now := time.Now()
 	body := map[string]any{
-		"PageNumber":               1,
-		"PageSize":                 100,
-		"ProductCode":              "p_tcaca",
-		"Status":                   []int{0, 3},
+		"PageNumber": 1,
+		"PageSize": 100,
+		"ProductCode": "p_tcaca",
+		"Status": []int{0, 3},
 		"PackageEndTimeRangeBegin": now.Format(packageEndLayout),
-		"PackageEndTimeRangeEnd":   now.Add(365 * 101 * 24 * time.Hour).Format(packageEndLayout),
+		"PackageEndTimeRangeEnd": now.Add(365 * 101 * 24 * time.Hour).Format(packageEndLayout),
 	}
-	// 余额查询同样做瞬时错误有界重试（签到后紧接着的 user-resource 偶发 500 会让
-	// 该账号错过本次解冻/到期快照更新，只能等下一个刷新周期）。
+	// Запрос баланса также с ограниченным ретраем транзиентных ошибок (сразу после чекина user-resource спорадически 500 Приведёт к
+	// Данный аккаунт пропустил текущую разморозку/обновление снапшота с истёкшим сроком, только ждать следующего цикла обновления).
 	var data json.RawMessage
 	err = c.retryBillingTransient(func() error {
 		var e error
@@ -1956,14 +1956,14 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 		Response struct {
 			Data struct {
 				Accounts []struct {
-					PackageName         string `json:"PackageName"`
-					CycleEndTime        string `json:"CycleEndTime"` // "2006-01-02 15:04:05"，缺省/空 = 无到期
-					CapacitySize        int64  `json:"CapacitySize"`
-					CapacityRemain      int64  `json:"CapacityRemain"`
-					CapacityUsed        int64  `json:"CapacityUsed"`
-					CycleCapacitySize   int64  `json:"CycleCapacitySize"`
-					CycleCapacityRemain int64  `json:"CycleCapacityRemain"`
-					CycleCapacityUsed   int64  `json:"CycleCapacityUsed"`
+					PackageName string `json:"PackageName"`
+					CycleEndTime string `json:"CycleEndTime"` // »2006-01-02 15:04:05"，по умолчанию/пустой = Без срока действия
+					CapacitySize int64 `json:"CapacitySize"`
+					CapacityRemain int64 `json:"CapacityRemain"`
+					CapacityUsed int64 `json:"CapacityUsed"`
+					CycleCapacitySize int64 `json:"CycleCapacitySize"`
+					CycleCapacityRemain int64 `json:"CycleCapacityRemain"`
+					CycleCapacityUsed int64 `json:"CycleCapacityUsed"`
 				} `json:"Accounts"`
 			} `json:"Data"`
 		} `json:"Response"`
@@ -1973,12 +1973,12 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 	}
 	for _, acct := range resp.Response.Data.Accounts {
 		r, _, size := packageRemainUsed(respAccount{
-			CapacityRemain:      acct.CapacityRemain,
-			CapacityUsed:        acct.CapacityUsed,
-			CapacitySize:        acct.CapacitySize,
+			CapacityRemain: acct.CapacityRemain,
+			CapacityUsed: acct.CapacityUsed,
+			CapacitySize: acct.CapacitySize,
 			CycleCapacityRemain: acct.CycleCapacityRemain,
-			CycleCapacityUsed:   acct.CycleCapacityUsed,
-			CycleCapacitySize:   acct.CycleCapacitySize,
+			CycleCapacityUsed: acct.CycleCapacityUsed,
+			CycleCapacitySize: acct.CycleCapacitySize,
 		})
 		if r < 0 {
 			r = 0
@@ -2001,7 +2001,7 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 		} else if end.Equal(earliestAt) {
 			earliestRemaining += r
 		}
-		// 分桶：仅 soon>0 且确实在窗口内 → expiring。
+		// Бакетизация: только soon>0 и действительно внутри окна → expiring。
 		if soon > 0 && !end.After(now.Add(soon)) {
 			expiring += r
 		}
@@ -2009,19 +2009,19 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 	return remain, total, expiring, earliestAt, earliestRemaining, nil
 }
 
-// respAccount 供 packageRemainUsed 解析的套餐字段（CreditPackages 的逐包结构同构）。
+// respAccount Подача packageRemainUsed Парсимое поле тарифа (CreditPackages попакетная структура изоморфна).
 type respAccount struct {
-	CapacityRemain      int64
-	CapacityUsed        int64
-	CapacitySize        int64
+	CapacityRemain int64
+	CapacityUsed int64
+	CapacitySize int64
 	CycleCapacityRemain int64
-	CycleCapacityUsed   int64
-	CycleCapacitySize   int64
+	CycleCapacityUsed int64
+	CycleCapacitySize int64
 }
 
-// packageRemainUsed 聚合单套餐的 remain/used/size（与 CreditPackages/cmd/credit 的
-// 历史口径一致，收敛至此作为单一事实来源）。Cycle 期套餐优先：用 CycleCapacity
-// 三字段，used 取 CycleUsed 与 size-remain 的较大者；否则回退 Capacity 三字段。
+// packageRemainUsed Агрегированного одиночного тарифа remain/used/size（и CreditPackages/cmd/credit 
+// Для консистентности исторического учета сведено к единому источнику истины).Cycle приоритет у срочного пакета: использовать CycleCapacity
+// три поля,used получить CycleUsed и size-remain большее из них; иначе откат Capacity три поля.
 func packageRemainUsed(a respAccount) (remain, used, size int64) {
 	if a.CycleCapacitySize > 0 {
 		remain = a.CycleCapacityRemain
@@ -2050,9 +2050,9 @@ func packageRemainUsed(a respAccount) (remain, used, size int64) {
 	return remain, used, size
 }
 
-// DailyCheckin 执行每日签到。已签到（业务 code 非 0）也返回错误，调用方按 msg 区分。
-// 偶发上游 5xx（code 10000）做有界重试（见 retryBillingTransient）——单次抖动不再
-// 让该账号整天漏签；「已签到」等业务错误不重试。
+// DailyCheckin Выполнить ежедневный check-in. Уже отмечено (бизнес code не 0）также возвращает ошибку, вызывающая сторона по msg Различение.
+// спорадический апстрим 5xx（code 10000）Делать ограниченный ретрай (см. retryBillingTransient）——однократный джиттер больше не
+// иначе аккаунт пропустит отметку на весь день; бизнес-ошибки типа "уже отмечено» не ретраить.
 func (c *Client) DailyCheckin(a *auth.Auth) error {
 	return c.retryBillingTransient(func() error {
 		_, err := c.billingMeterJSON(a, c.checkinMeterPaths(a), http.MethodPost, map[string]any{})
@@ -2060,9 +2060,9 @@ func (c *Client) DailyCheckin(a *auth.Auth) error {
 	})
 }
 
-// IsAlreadyCheckin 报告 err 是否表示"今天已签到"（上游幂等拒绝重复签到）。
-// 只认带分类的 *Error（业务 code 或 HTTP 错误）：网络层/解析层错误不得当作幂等成功，
-// 否则停机补签遇到抖动会误记为 already，账号当天实际未签到却被判定正常。
+// IsAlreadyCheckin отчет err означает ли"Сегодня уже отмечено"（upstream идемпотентно отклоняет повторный check-in).
+// только с категорией *Error（Бизнес code Или HTTP ошибка): сетевой уровень/Ошибка уровня парсинга не считается идемпотентным успехом,
+// иначе догнавшая отметка после простоя при джиттере будет ошибочно учтена как already，аккаунт фактически не отметился за день, но признан нормальным.
 func IsAlreadyCheckin(err error) bool {
 	var ue *Error
 	if !errors.As(err, &ue) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// systemRoles 提取 messages 中所有 role 值，用于断言改写后的角色序列。
+// systemRoles извлечение messages Все в role значение, для assert последовательности ролей после перезаписи.
 func systemRoles(t *testing.T, body []byte) []string {
 	t.Helper()
 	var obj map[string]any
@@ -35,13 +35,13 @@ func TestRewriteReplacesSystemAndDeveloper(t *testing.T) {
 	in := []byte(`{
 		"model":"glm-5.2",
 		"messages":[
-			{"role":"system","content":"被替换的旧提示词"},
-			{"role":"developer","content":"开发者指令"},
-			{"role":"user","content":"你好"}
+			{"role":"system","content":"заменяемый старый промпт"},
+			{"role":"developer","content":"Инструкция разработчика"},
+			{"role":"user","content":"Привет"}
 		],
 		"metadata":{"conversation_id":"c1"}
 	}`)
-	out := Rewrite(in, "我是自有提示词")
+	out := Rewrite(in, "Я — собственный промпт")
 	roles := systemRoles(t, out)
 	wantRoles := []string{"system", "user"}
 	if len(roles) != len(wantRoles) {
@@ -52,15 +52,15 @@ func TestRewriteReplacesSystemAndDeveloper(t *testing.T) {
 			t.Fatalf("roles[%d]=%q want %q (all=%v)", i, r, wantRoles[i], roles)
 		}
 	}
-	// 头部 system 内容恰为自有提示词，旧 system/developer 内容零残留。
+	// заголовок system содержимое как раз собственный промпт, старый system/developer Нулевой остаток контента.
 	var obj map[string]any
 	json.Unmarshal(out, &obj)
 	msgs := obj["messages"].([]any)
 	first := msgs[0].(map[string]any)
-	if first["content"] != "我是自有提示词" {
+	if first["content"] != "Я — собственный промпт" {
 		t.Errorf("first system content=%v", first["content"])
 	}
-	if strings.Contains(string(out), "被替换的旧提示词") || strings.Contains(string(out), "开发者指令") {
+	if strings.Contains(string(out), "заменяемый старый промпт") || strings.Contains(string(out), "Инструкция разработчика") {
 		t.Errorf("old system/developer content leaked: %s", out)
 	}
 }
@@ -77,7 +77,7 @@ func TestRewriteKeepsUserAssistantToolUntouched(t *testing.T) {
 	var obj map[string]any
 	json.Unmarshal(out, &obj)
 	msgs := obj["messages"].([]any)
-	// 预期：system(新) + user + assistant + tool，顺序保留。
+	// Ожидается:system(новый) + user + assistant + tool，Порядок сохраняется.
 	if len(msgs) != 4 {
 		t.Fatalf("len=%d", len(msgs))
 	}
@@ -88,7 +88,7 @@ func TestRewriteKeepsUserAssistantToolUntouched(t *testing.T) {
 			t.Fatalf("roles=%v want %v", roles, want)
 		}
 	}
-	// user/assistant/tool 字段逐字不动。
+	// user/assistant/tool поля дословно без изменений.
 	userMsg := msgs[1].(map[string]any)
 	if userMsg["content"] != "u-content" {
 		t.Errorf("user content changed: %v", userMsg["content"])
@@ -137,13 +137,13 @@ func TestRewriteInjectsSystemWhenAbsent(t *testing.T) {
 }
 
 func TestRewriteMultimodalContentUntouched(t *testing.T) {
-	// user content 为多模态数组（text + image_url），Rewrite 只动 messages 层级，
-	// 不应改动 content 内部结构。
+	// user content как мультимодальный массив (text + image_url），Rewrite трогать только messages уровень,
+	// не следует изменять content внутренняя структура.
 	in := []byte(`{
 		"messages":[
 			{"role":"system","content":"old"},
 			{"role":"user","content":[
-				{"type":"text","text":"看图"},
+				{"type":"text","text":"См. рисунок"},
 				{"type":"image_url","image_url":{"url":"data:..."}}
 			]}
 		]
@@ -161,7 +161,7 @@ func TestRewriteMultimodalContentUntouched(t *testing.T) {
 		t.Fatalf("multimodal content changed: %v", userMsg["content"])
 	}
 	textPart := arr[0].(map[string]any)
-	if textPart["type"] != "text" || textPart["text"] != "看图" {
+	if textPart["type"] != "text" || textPart["text"] != "См. рисунок" {
 		t.Errorf("text part changed: %v", textPart)
 	}
 }
@@ -184,7 +184,7 @@ func TestRewriteEmptyBodyReturnedAsIs(t *testing.T) {
 func TestRewriteEmptyPromptReturnedAsIs(t *testing.T) {
 	in := []byte(`{"messages":[{"role":"system","content":"old"}]}`)
 	out := Rewrite(in, "")
-	// systemPrompt 空 → 不改写，原样返回。
+	// systemPrompt пустой → не перезаписывать, вернуть как есть.
 	if string(out) != string(in) {
 		t.Errorf("empty prompt should return as-is: got %s", out)
 	}
@@ -206,7 +206,7 @@ func TestLoadDefaultWhenFileEmpty(t *testing.T) {
 func TestLoadFileOverride(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "my.md")
-	want := "这是我的自定义人格入口。"
+	want := "Это вход моей кастомной личности."
 	os.WriteFile(fp, []byte(want), 0o600)
 	got, err := Load("custom", fp)
 	if err != nil {

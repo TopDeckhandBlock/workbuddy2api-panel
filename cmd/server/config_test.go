@@ -56,7 +56,7 @@ func TestLoggingDefaults(t *testing.T) {
 	if !c.Logging.RequestArchiveEnabled || c.Logging.RequestRetentionDays != 7 || c.Logging.RequestArchiveMaxMB != 100 {
 		t.Fatalf("logging defaults = %+v", c.Logging)
 	}
-	// 来源记录（IP/UA）缺省开启：键缺席时必须保持 true，只有显式 false 才关闭。
+	// Запись источника (IP/UA）включено по умолчанию: при отсутствии ключа сохранять true，Только явно false только тогда закрывается.
 	if !c.Logging.RequestClientInfo {
 		t.Fatalf("request_client_info default = false, want true: %+v", c.Logging)
 	}
@@ -118,7 +118,7 @@ func TestBadDuration(t *testing.T) {
 }
 
 func TestHardCreditKeyIgnored(t *testing.T) {
-	// 退役的 hard_credit 键作为 JSON 未知字段被自然忽略，不报错。
+	// Выведенная из эксплуатации hard_credit Ключ как JSON Неизвестные поля игнорируются без ошибки.
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
 	os.WriteFile(fp, []byte(`{"cooldown":{"hard_credit":"not-a-duration","soft_rate":"30s"}}`), 0o600)
@@ -255,7 +255,7 @@ func TestNegativeExpiringSoonClampsToDisabled(t *testing.T) {
 }
 
 func TestSoftRateMaxEmptyFallsBackToDefault(t *testing.T) {
-	// 键缺席 → Default() 的 2h 保留（空串无法 ParseDuration）。
+	// Ключ отсутствует → Default() 2h Сохранить (пустая строка не может ParseDuration）。
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
 	os.WriteFile(fp, []byte(`{"cooldown":{"soft_rate":"90s"}}`), 0o600)
@@ -287,7 +287,7 @@ func TestBadBreakerCooldown(t *testing.T) {
 }
 
 func TestUpstreamTimeoutDefaults(t *testing.T) {
-	// 默认：header 回落 timeout，idle 回落 300。
+	// По умолчанию:header откат timeout，idle откат 300。
 	c := Default()
 	if err := c.normalize(); err != nil {
 		t.Fatalf("normalize: %v", err)
@@ -304,7 +304,7 @@ func TestUpstreamTimeoutDefaults(t *testing.T) {
 }
 
 func TestUpstreamHeaderFallsBackToTimeout(t *testing.T) {
-	// 只设 timeout_seconds：header 回落同值，idle 回落 300。
+	// устанавливать только timeout_seconds：header Откат к тому же значению,idle откат 300。
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
 	os.WriteFile(fp, []byte(`{"upstream":{"timeout_seconds":60}}`), 0o600)
@@ -351,7 +351,7 @@ func TestUpstreamEnvOverride(t *testing.T) {
 	}
 }
 
-// TestRetiredTravelIntervalKeyIgnored 退役的 travel_interval_minutes 键按未知字段忽略，不报错。
+// TestRetiredTravelIntervalKeyIgnored Выведенная из эксплуатации travel_interval_minutes Ключ игнорируется как неизвестное поле, без ошибки.
 func TestRetiredTravelIntervalKeyIgnored(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -361,12 +361,12 @@ func TestRetiredTravelIntervalKeyIgnored(t *testing.T) {
 		t.Fatalf("retired key should not fail load: %v", err)
 	}
 	if len(c.Schedule.CheckinHours) != 1 || c.Schedule.CheckinHours[0] != 9 {
-		t.Errorf("checkin_hours=%v want [9]（同段其余键照常生效）", c.Schedule.CheckinHours)
+		t.Errorf("checkin_hours=%v want [9]（остальные ключи того же сегмента действуют как обычно)", c.Schedule.CheckinHours)
 	}
 }
 
-// TestScheduleEnabledByDefault 四个任务的 enabled 开关默认均为 true：
-// 老 config 不写这些键，行为必须与从前完全一致。
+// TestScheduleEnabledByDefault четырёх задач enabled выключатели по умолчанию true：
+// Старый config Без записи этих ключей поведение должно полностью совпадать с прежним.
 func TestScheduleEnabledByDefault(t *testing.T) {
 	c := Default()
 	if err := c.normalize(); err != nil {
@@ -388,8 +388,8 @@ func TestScheduleEnabledByDefault(t *testing.T) {
 	}
 }
 
-// TestScheduleLegacyConfigKeepsRunning 老 config（只写签到/保活小时数组，无新键）加载后仍是启用态，
-// 新开关缺省 true、新 hours 回落默认——对老配置零影响。
+// TestScheduleLegacyConfigKeepsRunning Старый config（Писать только чекин/массив часов keep-alive, без новых ключей) после загрузки остаётся во включённом состоянии,
+// Новый флаг по умолчанию выключен true、новый hours Откат к дефолту — без влияния на старые конфиги.
 func TestScheduleLegacyConfigKeepsRunning(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -407,7 +407,7 @@ func TestScheduleLegacyConfigKeepsRunning(t *testing.T) {
 	if len(c.Schedule.CheckinHours) != 2 {
 		t.Errorf("checkin_hours=%v", c.Schedule.CheckinHours)
 	}
-	// 新 hours 缺省 → 回落默认（非空）。
+	// новый hours по умолчанию → откат к дефолту (непустое).
 	if len(c.Schedule.TravelHours) != 2 || c.Schedule.TravelHours[0] != 9 || c.Schedule.TravelHours[1] != 21 {
 		t.Errorf("travel_hours=%v want default [9,21]", c.Schedule.TravelHours)
 	}
@@ -416,8 +416,8 @@ func TestScheduleLegacyConfigKeepsRunning(t *testing.T) {
 	}
 }
 
-// TestScheduleExplicitDisable 显式 checkin_enabled=false 即可真正关掉签到
-// （issue #27 边界：此前无论怎么配小时都关不掉）。
+// TestScheduleExplicitDisable Явно checkin_enabled=false тогда можно полностью отключить чекин
+// （issue #27 граница: ранее как ни настраивай часы — не отключить).
 func TestScheduleExplicitDisable(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -429,7 +429,7 @@ func TestScheduleExplicitDisable(t *testing.T) {
 	if c.Schedule.CheckinEnabled || c.Schedule.KeepaliveEnabled {
 		t.Errorf("want both disabled: %+v", c.Schedule)
 	}
-	// 小时数组仍回落默认值（禁用与默认值互不干扰：重新启用无需补配小时）。
+	// массив часов откатывается к дефолту (отключение не конфликтует с дефолтом: при повторном включении часы донастраивать не нужно).
 	if len(c.Schedule.CheckinHours) != 2 || c.Schedule.CheckinHours[0] != 9 || c.Schedule.CheckinHours[1] != 21 {
 		t.Errorf("checkin_hours=%v want default [9 21] even when disabled", c.Schedule.CheckinHours)
 	}
@@ -438,7 +438,7 @@ func TestScheduleExplicitDisable(t *testing.T) {
 	}
 }
 
-// TestScheduleTravelActivityExplicitDisable 显式关闭旅行/活跃上报开关。
+// TestScheduleTravelActivityExplicitDisable Явно отключить travel/переключатель отчета об активности.
 func TestScheduleTravelActivityExplicitDisable(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -450,11 +450,11 @@ func TestScheduleTravelActivityExplicitDisable(t *testing.T) {
 	if c.Schedule.TravelEnabled || c.Schedule.ActivityEnabled {
 		t.Errorf("want travel/activity disabled: %+v", c.Schedule)
 	}
-	// 签到/保活开关缺省 true（互不干扰）。
+	// check-in/Переключатель keep-alive по умолчанию true（не мешают друг другу).
 	if !c.Schedule.CheckinEnabled || !c.Schedule.KeepaliveEnabled {
 		t.Errorf("checkin/keepalive should stay enabled: %+v", c.Schedule)
 	}
-	// hours 仍回落默认。
+	// hours всё равно откат к дефолту.
 	if len(c.Schedule.TravelHours) != 2 || c.Schedule.TravelHours[0] != 9 || c.Schedule.TravelHours[1] != 21 {
 		t.Errorf("travel_hours=%v want default [9,21] even when disabled", c.Schedule.TravelHours)
 	}
@@ -463,7 +463,7 @@ func TestScheduleTravelActivityExplicitDisable(t *testing.T) {
 	}
 }
 
-// TestScheduleTravelActivityInvalidHoursRejected 旅行/活跃非法小时报错并指向正确开关。
+// TestScheduleTravelActivityInvalidHoursRejected путешествие/Ошибка при активных недопустимых часах с указанием на корректный переключатель.
 func TestScheduleTravelActivityInvalidHoursRejected(t *testing.T) {
 	cases := []struct{ body, wantSwitch string }{
 		{`{"schedule":{"travel_hours":[25]}}`, "travel_enabled"},
@@ -485,7 +485,7 @@ func TestScheduleTravelActivityInvalidHoursRejected(t *testing.T) {
 	}
 }
 
-// TestScheduleTravelActivityExplicitHours 显式配置旅行/活跃小时。
+// TestScheduleTravelActivityExplicitHours Явная конфигурация travel/Часы активности.
 func TestScheduleTravelActivityExplicitHours(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -502,7 +502,7 @@ func TestScheduleTravelActivityExplicitHours(t *testing.T) {
 	}
 }
 
-// TestScheduleDisableKeepsExplicitHours 禁用不擦除用户配置的小时（便于原样恢复）。
+// TestScheduleDisableKeepsExplicitHours Отключение не стирает часы, настроенные пользователем (для восстановления как было).
 func TestScheduleDisableKeepsExplicitHours(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -519,12 +519,12 @@ func TestScheduleDisableKeepsExplicitHours(t *testing.T) {
 	}
 }
 
-// TestScheduleEmptyHoursFallsBackToDefault 空数组 / null / 缺省都视同「未配置」→ 回落默认。
+// TestScheduleEmptyHoursFallsBackToDefault Пустой массив / null / По умолчанию считается "не настроено»→ Фолбэк на дефолт.
 func TestScheduleEmptyHoursFallsBackToDefault(t *testing.T) {
 	cases := map[string]string{
-		"absent":   `{}`,
-		"empty":    `{"schedule":{}}`,
-		"null":     `{"schedule":{"checkin_hours":null,"keepalive_hours":null,"travel_hours":null,"activity_hours":null}}`,
+		"absent": `{}`,
+		"empty": `{"schedule":{}}`,
+		"null": `{"schedule":{"checkin_hours":null,"keepalive_hours":null,"travel_hours":null,"activity_hours":null}}`,
 		"emptyarr": `{"schedule":{"checkin_hours":[],"keepalive_hours":[],"travel_hours":[],"activity_hours":[]}}`,
 	}
 	for name, body := range cases {
@@ -558,8 +558,8 @@ func TestScheduleEmptyHoursFallsBackToDefault(t *testing.T) {
 	}
 }
 
-// TestScheduleInvalidHourRejected 非法小时快速失败：指向正确的禁用开关，避免用户
-// 猜测哨兵值（[-1] 之类）被静默当成"改到别的整点"。
+// TestScheduleInvalidHourRejected невалидный час — быстрый отказ: указать на корректный выключатель, чтобы пользователь не
+// Угадать sentinel-значение ([-1] и т.п.) тихо считается как"перенести на другой ровный час"。
 func TestScheduleInvalidHourRejected(t *testing.T) {
 	cases := []struct{ body, wantSwitch string }{
 		{`{"schedule":{"checkin_hours":[25]}}`, "checkin_enabled"},
@@ -591,19 +591,19 @@ func TestBadSessionTTL(t *testing.T) {
 
 func TestWriteDefault(t *testing.T) {
 	dir := t.TempDir()
-	fp := filepath.Join(dir, "sub", "config.json") // 顺带验证父目录自动创建
+	fp := filepath.Join(dir, "sub", "config.json") // попутно проверить автосоздание родительской директории
 	key, err := WriteDefault(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// key 形如 sk-<24字符随机串>，两次生成不重复
+	// key вида sk-<24Случайная строка символов>，две генерации без дублей
 	if !strings.HasPrefix(key, "sk-") || len(key) < 20 {
 		t.Errorf("key=%q want sk-<random>", key)
 	}
 	if key2, _ := WriteDefault(filepath.Join(dir, "another.json")); key2 == key {
 		t.Errorf("two generated keys identical: %q", key)
 	}
-	// 落盘文件可被 Load 正常加载，推荐值齐备且 api_key 生效
+	// Файл на диске может быть Load Нормальная загрузка, рекомендуемые значения в наличии и api_key Вступает в силу
 	c, err := Load(fp)
 	if err != nil {
 		t.Fatalf("load generated config: %v", err)
@@ -617,14 +617,14 @@ func TestWriteDefault(t *testing.T) {
 	if len(c.Schedule.CheckinHours) == 0 || !c.Schedule.CheckinEnabled {
 		t.Errorf("generated schedule off: %+v", c.Schedule)
 	}
-	// 已存在的文件不覆盖：二次写入同一路径必须报错
+	// Существующие файлы не перезаписывать: повторная запись по тому же пути должна вызвать ошибку
 	if _, err := WriteDefault(fp); err == nil {
 		t.Error("WriteDefault must refuse to overwrite existing file")
 	}
 }
 
 func TestBalanceRefreshDefaults(t *testing.T) {
-	// 缺省：启用 + 30 分钟
+	// по умолчанию: включено + 30 минут
 	c := Default()
 	if err := c.normalize(); err != nil {
 		t.Fatal(err)
@@ -632,7 +632,7 @@ func TestBalanceRefreshDefaults(t *testing.T) {
 	if !c.Schedule.BalanceRefreshEnabled || c.BalanceRefreshInterval != 5*time.Minute {
 		t.Errorf("default balance refresh: enabled=%v interval=%v", c.Schedule.BalanceRefreshEnabled, c.BalanceRefreshInterval)
 	}
-	// 显式配置 10 分钟
+	// Явная конфигурация 10 минут
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
 	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":10}}`), 0o600)
@@ -643,7 +643,7 @@ func TestBalanceRefreshDefaults(t *testing.T) {
 	if c2.BalanceRefreshInterval != 10*time.Minute {
 		t.Errorf("interval=%v want 10m", c2.BalanceRefreshInterval)
 	}
-	// 显式关闭：interval 归零（不启动）
+	// Явное отключение:interval сброс в ноль (не запускать)
 	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_enabled":false}}`), 0o600)
 	c3, err := Load(fp)
 	if err != nil {
@@ -652,7 +652,7 @@ func TestBalanceRefreshDefaults(t *testing.T) {
 	if c3.BalanceRefreshInterval != 0 {
 		t.Errorf("disabled interval=%v want 0", c3.BalanceRefreshInterval)
 	}
-	// 启用但 minutes<=0 → 回落默认 30
+	// Включено, но minutes<=0 → откат к дефолту 30
 	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_minutes":-5}}`), 0o600)
 	c4, err := Load(fp)
 	if err != nil {
@@ -663,8 +663,8 @@ func TestBalanceRefreshDefaults(t *testing.T) {
 	}
 }
 
-// TestPromptDefaultPassthrough 默认 prompt.mode=passthrough（对齐上游：透传客户端
-// 原始 system 是更保守的缺省）；custom 由用户显式选择，此时 PromptText 为内置默认（非空）。
+// TestPromptDefaultPassthrough По умолчанию prompt.mode=passthrough（Выравнивание с апстримом: проксирование клиента
+// Исходный system более консервативное значение по умолчанию);custom Явно выбирается пользователем, в этом случае PromptText Встроенное значение по умолчанию (непустое).
 func TestPromptDefaultPassthrough(t *testing.T) {
 	c, err := Load("")
 	if err != nil {
@@ -673,10 +673,10 @@ func TestPromptDefaultPassthrough(t *testing.T) {
 	if c.Prompt.Mode != "passthrough" {
 		t.Errorf("prompt.mode=%q want passthrough", c.Prompt.Mode)
 	}
-	// passthrough 不加载提示词文本（透传客户端 system）；切 custom 时 normalize 会加载。
+	// passthrough не загружать текст промпта (сквозная передача клиента system）；Переключить custom Время normalize Будет загружено.
 }
 
-// TestPromptExplicitPassthrough passthrough 模式不加载文本（透传客户端原始 system）。
+// TestPromptExplicitPassthrough passthrough Режим не загружает текст (прозрачная передача оригинала клиента system）。
 func TestPromptExplicitPassthrough(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -693,7 +693,7 @@ func TestPromptExplicitPassthrough(t *testing.T) {
 	}
 }
 
-// TestPromptInvalidMode 非法 mode 启动报错。
+// TestPromptInvalidMode Недопустимый mode Ошибка запуска.
 func TestPromptInvalidMode(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -703,7 +703,7 @@ func TestPromptInvalidMode(t *testing.T) {
 	}
 }
 
-// TestPromptFileMissing 文件路径非空但不存在 → 启动报错（fail fast）。
+// TestPromptFileMissing путь к файлу непустой, но не существует → Ошибка запуска (fail fast）。
 func TestPromptFileMissing(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -713,14 +713,14 @@ func TestPromptFileMissing(t *testing.T) {
 	}
 }
 
-// TestPromptFileOverride 自定义 file 覆盖内置默认。
+// TestPromptFileOverride Пользовательский file Перекрывает встроенные значения по умолчанию.
 func TestPromptFileOverride(t *testing.T) {
 	dir := t.TempDir()
 	pf := filepath.Join(dir, "my.md")
-	want := "我的自定义人格入口"
+	want := "Вход кастомной личности"
 	os.WriteFile(pf, []byte(want), 0o600)
 	cf := filepath.Join(dir, "c.json")
-	// 用 json.Marshal 拼路径：Windows 反斜杠必须转义，手工字符串拼接会产出非法 JSON。
+	// использовать json.Marshal сборка пути:Windows обратный слэш должен экранироваться, ручная конкатенация строк даст невалидный JSON。
 	cfgJSON, err := json.Marshal(map[string]any{"prompt": map[string]any{"mode": "custom", "file": pf}})
 	if err != nil {
 		t.Fatal(err)
@@ -735,7 +735,7 @@ func TestPromptFileOverride(t *testing.T) {
 	}
 }
 
-// TestPromptEnvOverride env 覆盖 prompt.mode 与 prompt.file。
+// TestPromptEnvOverride env перекрытие prompt.mode и prompt.file。
 func TestPromptEnvOverride(t *testing.T) {
 	t.Setenv("WB2A_PROMPT_MODE", "passthrough")
 	c, err := Load("")
@@ -747,7 +747,7 @@ func TestPromptEnvOverride(t *testing.T) {
 	}
 }
 
-// TestPromptLegacyConfigNoImpact 旧 config（无 prompt 段）零影响：mode 缺省 passthrough。
+// TestPromptLegacyConfigNoImpact старый config（отсутствует prompt секция) нулевое влияние:mode по умолчанию passthrough。
 func TestPromptLegacyConfigNoImpact(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -764,10 +764,10 @@ func TestPromptLegacyConfigNoImpact(t *testing.T) {
 	}
 }
 
-// TestUpstreamUserAgentConfig 配置 upstream.user_agent 与 env WB2A_USER_AGENT 均生效，
-// 缺省空串保持现状（headers 层回落到 clientUA）。
+// TestUpstreamUserAgentConfig Конфигурация upstream.user_agent и env WB2A_USER_AGENT всё действует,
+// Пустая строка по умолчанию сохраняет текущее состояние (headers уровень фолбэчится на clientUA）。
 func TestUpstreamUserAgentConfig(t *testing.T) {
-	// JSON 配置
+	// JSON Конфигурация
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
 	os.WriteFile(fp, []byte(`{"upstream":{"user_agent":"WorkBuddy/1.2.3"}}`), 0o600)
@@ -778,11 +778,11 @@ func TestUpstreamUserAgentConfig(t *testing.T) {
 	if c.Upstream.UserAgent != "WorkBuddy/1.2.3" {
 		t.Errorf("user_agent=%q want WorkBuddy/1.2.3", c.Upstream.UserAgent)
 	}
-	// 缺省为空
+	// по умолчанию пусто
 	if c2, err := Load(""); err != nil || c2.Upstream.UserAgent != "" {
 		t.Errorf("default user_agent=%q want empty (err=%v)", c2.Upstream.UserAgent, err)
 	}
-	// env 覆盖
+	// env перекрытие
 	t.Setenv("WB2A_USER_AGENT", "EnvAgent/9")
 	c3, err := Load("")
 	if err != nil {
@@ -793,9 +793,9 @@ func TestUpstreamUserAgentConfig(t *testing.T) {
 	}
 }
 
-// TestLoadConfigPathIsDirectory config 路径是目录时给出可操作提示（Docker bind mount 陷阱）。
-// 复现：compose 挂载 ./config.json 但宿主机缺该文件 → Docker 创建同名目录 → 启动失败。
-// 旧行为只报 "read config: ... Incorrect function" 之类晦涩错误，无从排查。
+// TestLoadConfigPathIsDirectory config Если путь — директория, показать actionable подсказку (Docker bind mount ловушка).
+// воспроизведение:compose Монтирование ./config.json Но на хосте отсутствует файл → Docker Создать каталог с тем же именем → Ошибка запуска.
+// Старое поведение сообщает только "read config: ... Incorrect function" подобных неясных ошибок, невозможно отладить.
 func TestLoadConfigPathIsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	asDir := filepath.Join(dir, "config.json")
@@ -807,7 +807,7 @@ func TestLoadConfigPathIsDirectory(t *testing.T) {
 		t.Fatal("want error when config path is a directory")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "是目录") {
+	if !strings.Contains(msg, "это директория") {
 		t.Errorf("error should explain it is a directory: %v", err)
 	}
 	if !strings.Contains(msg, "config.example.json") {

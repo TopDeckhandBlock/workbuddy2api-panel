@@ -8,18 +8,18 @@ import (
 )
 
 func newTestPanel() *Panel {
-	// 启用鉴权：未带 key 的请求一律 401，不进入依赖 Pool/Upstream 的 handler。
+	// включить аутентификацию: отсутствует key запросы — все 401，не входит в зависимости Pool/Upstream handler。
 	return New(Config{Version: "test", APIKey: "test-key"})
 }
 
-// 面板安全响应头必须覆盖：页面、静态脚本、鉴权失败响应。
+// Security-заголовки панели должны покрывать: страницы, статические скрипты, ответы с ошибкой аутентификации.
 func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 	p := newTestPanel()
 	paths := []struct{ method, path string }{
 		{"GET", "/panel/"},
 		{"GET", "/panel/app.js"},
-		{"GET", "/panel/api/overview"}, // 401（未提供 key）
-		{"POST", "/panel/api/config"},  // 401
+		{"GET", "/panel/api/overview"}, // 401（не предоставлено key）
+		{"POST", "/panel/api/config"}, // 401
 		{"GET", "/panel/api/nonexistent"},
 	}
 	for _, c := range paths {
@@ -41,7 +41,7 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 	}
 }
 
-// CSP 必须禁止内联脚本与 iframe 嵌套（严格策略的核心约束）。
+// CSP необходимо запретить инлайн-скрипты и iframe вложенность (ключевое ограничение строгой политики).
 func TestCSPDisallowsInlineScriptAndFraming(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
@@ -63,7 +63,7 @@ func TestCSPDisallowsInlineScriptAndFraming(t *testing.T) {
 	}
 }
 
-// 页面必须引用外部脚本（内联脚本会被上面的 CSP 拦掉，页面将完全不可用）。
+// Страница должна подключать внешний скрипт (инлайн-скрипт будет заблокирован указанным выше CSP блокировка — страница станет полностью недоступна).
 func TestIndexReferencesExternalScript(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
@@ -73,13 +73,13 @@ func TestIndexReferencesExternalScript(t *testing.T) {
 	if !strings.Contains(body, `<script src="app.js"></script>`) {
 		t.Error("index.html must load app.js externally (inline script is blocked by CSP)")
 	}
-	// 反例保护：出现内联 <script>...</script> 内容块即为回归
+	// Защита от контрпримера: при появлении inline <script>...</script> блок контента — это возврат
 	if strings.Contains(body, "<script>\n") || strings.Contains(body, "<script> ") {
 		t.Error("index.html still contains an inline <script> block; CSP would block it")
 	}
 }
 
-// app.js 必须能作为同源脚本取到且类型正确（否则页面白屏）。
+// app.js Должен загружаться как same-origin скрипт с корректным типом (иначе белый экран).
 func TestAppScriptServed(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestAppScriptServed(t *testing.T) {
 	}
 }
 
-// UID 白名单：拒绝路径穿越与异常字符，放行真实 UUID 形态。
+// UID Белый список: блокировать обход пути и аномальные символы, пропускать реальные UUID Форма.
 func TestValidUID(t *testing.T) {
 	ok := []string{
 		"248890d9-bb26-4131-87a7-4ec74d472344",
@@ -113,7 +113,7 @@ func TestValidUID(t *testing.T) {
 		"uid\nnewline",
 		"uid\x00null",
 		"café",
-		strings.Repeat("a", 65), // 超长
+		strings.Repeat("a", 65), // Сверхдлинный
 	}
 	for _, u := range ok {
 		if !validUID(u) {
@@ -127,7 +127,7 @@ func TestValidUID(t *testing.T) {
 	}
 }
 
-// 未带密钥的 API 请求必须 401；携带正确密钥则通过鉴权层（不再是 401）。
+// без ключа API Запрос должен 401；При наличии корректного ключа проходит слой аутентификации (уже не 401）。
 func TestAuthLayerBehavior(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
@@ -135,7 +135,7 @@ func TestAuthLayerBehavior(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no key: code=%d want 401", rec.Code)
 	}
-	// 用不存在的路由验证"带正确 key 已过鉴权"（避免触碰依赖 nil 的 handler）。
+	// проверка несуществующим роутом"с корректным key Аутентификация пройдена"（избегать затрагивания зависимостей nil handler）。
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest("GET", "/panel/api/nonexistent", nil)
 	req2.Header.Set("Authorization", "Bearer test-key")

@@ -1,5 +1,5 @@
-// blackcat.go 夜猫子任务执行器：23:00–08:00 窗口内对池内账号补足 glm-5.2 对话
-// 并上报事件链（black_cat 判据）。窗口外触发则直接跳过（只观测，不报错）。
+// blackcat.go Исполнитель задач "Ночная сова»:23:00–08:00 Пополнение аккаунтов пула внутри окна glm-5.2 Диалог
+// и отправить цепочку событий (black_cat критерий). Срабатывание вне окна просто пропускается (только наблюдение, без ошибки).
 package scheduler
 
 import (
@@ -10,11 +10,11 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
-// RunBlackcatNow 对所有可用账号执行夜猫子对话补足（窗口外跳过）。
-// 由 blackcat_hours 排程（默认 [23]）触发；执行前二次校验 InNightWindow。
+// RunBlackcatNow Для всех доступных аккаунтов выполнить добивку диалогов "ночной совы» (вне окна — пропуск).
+// От blackcat_hours расписание (по умолчанию [23]）Триггер; повторная проверка перед выполнением InNightWindow。
 func (s *Scheduler) RunBlackcatNow() {
 	if !upstream.InNightWindow(time.Now()) {
-		log.Printf("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
+		log.Printf("blackcat: Сейчас отсутствует 23:00–08:00 Окно подсчета, пропустить")
 		return
 	}
 	for _, st := range s.cfg.Pool.List() {
@@ -26,7 +26,7 @@ func (s *Scheduler) RunBlackcatNow() {
 			continue
 		}
 		if a.IsGlobal() {
-			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
+			continue // D4 Гейт:global отсутствует CN Система задач, без вызовов апстрима
 		}
 		need, err := s.cfg.Upstream.BlackcatNeed(a)
 		if err != nil {
@@ -38,10 +38,10 @@ func (s *Scheduler) RunBlackcatNow() {
 		}
 		ok, err := s.cfg.Upstream.RunNightChats(a, int(need))
 		if err != nil {
-			log.Printf("blackcat %s: %d/%d 完成，中断: %v", logfmt.Label(a.UID, a.Nickname), ok, need, err)
+			log.Printf("blackcat %s: %d/%d завершено, прервано: %v", logfmt.Label(a.UID, a.Nickname), ok, need, err)
 			continue
 		}
-		log.Printf("blackcat %s: 完成 %d 次夜间对话", logfmt.Label(a.UID, a.Nickname), ok)
+		log.Printf("blackcat %s: Завершено %d ночных диалогов", logfmt.Label(a.UID, a.Nickname), ok)
 		time.Sleep(activityAccountDelay)
 	}
 }

@@ -1,24 +1,24 @@
-// desktop.go 桌面客户端（WorkBuddy Desktop 5.5.6）行为指纹上报。
+// desktop.go Десктоп-клиент (WorkBuddy Desktop 5.5.6）Отправка поведенческого отпечатка.
 //
-// 来源：2026-09-12 Sunny 抓包实测（data/desktop-task-protocol.md）。桌面端点亮
-// 「需电脑端」类任务的关键不是独立端点，而是同一 POST /v2/report 通道上
-// **不同的客户端指纹**：
+// Источник:2026-09-12 Sunny Захвачено сниффером (data/desktop-task-protocol.md）。подсветка на десктопе
+// 「ключ задач типа "требуется десктоп» — не отдельный эндпоинт, а тот же POST /v2/report На канале
+// **Разные отпечатки клиента**：
 //
-//	POST https://copilot.tencent.com/v2/report        ← chatBase（CLI 上报走 billingBase）
+//	POST https://copilot.tencent.com/v2/report ← chatBase（CLI Отправка через billingBase）
 //	User-Agent: WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1
 //	X-Domain: copilot.tencent.com, X-Product: SaaS, X-User-Id: <uid>
-//	Body: [ {...event...} ]                           ← 数组
+//	Body: [ {...event...} ] ← Массив
 //
-// 每个事件除业务字段外必带桌面指纹（ideName/ideType=WorkBuddy、
-// extName=workbuddy-desktop 等）。实测点亮记录：
-//   - RichMeow_Chat（桌面端对话1次）：agent_task_created + 成功的
-//     chat_message_response(isSuccessful=true) → 1/1 + UR Buddy。
-//   - Hp_Appearance（主题任务）：独立 API
-//     POST /v2/user-asset/appearance/set {kind:"theme",resource_key} → SetAppearanceTheme。
+// Каждое событие кроме бизнес-полей обязательно содержит отпечаток десктопа (ideName/ideType=WorkBuddy、
+// extName=workbuddy-desktop и т.д.). Фактические записи срабатывания:
+// - RichMeow_Chat（Диалог десктопной версии1раз):agent_task_created + успешный
+// chat_message_response(isSuccessful=true) → 1/1 + UR Buddy。
+// - Hp_Appearance（Тематические задачи): независимо API
+// POST /v2/user-asset/appearance/set {kind:"theme",resource_key} → SetAppearanceTheme。
 //
-// 注意：service 端对事件链有一定真实性校验倾向（RichMeow 需要消息成功回执），
-// 本模块按实测事件形状发送，不保证所有任务都能 API 侧点亮——autotask 侧
-// 仍按 attempt 语义处理结果。
+// Внимание:service клиент склонен проверять подлинность цепочки событий (RichMeow требуется ACK успешной доставки сообщения),
+// Модуль отправляет по фактической форме событий, не гарантирует, что все задачи смогут API подсветка сбоку —autotask Боковой
+// По-прежнему по attempt Результат семантической обработки.
 package upstream
 
 import (
@@ -37,57 +37,57 @@ import (
 )
 
 const (
-	desktopReportPath    = "/v2/report"
+	desktopReportPath = "/v2/report"
 	desktopAppearanceSet = "/v2/user-asset/appearance/set"
-	// desktopUA 实测桌面客户端 UA（5.5.6 内嵌 CLI 2.137.1）。
+	// desktopUA Фактический десктоп-клиент UA（5.5.6 Встроенный CLI 2.137.1）。
 	desktopUA = "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1"
 )
 
-// desktopBase 桌面端 /v2/report 与 user-asset 走 chatBase（copilot.tencent.com）。
+// desktopBase Десктоп /v2/report и user-asset Ход chatBase（copilot.tencent.com）。
 func (c *Client) desktopBase(a *auth.Auth) string { return c.chatBase(a) }
 
-// deriveID 由 uid 稳定派生一个 36 位 hex 设备标识（machineId/qimei36 复用），
-// 幂等：同一账号每次生成相同值，模拟固定设备。
+// deriveID От uid детерминированно вывести один 36 бит hex Идентификатор устройства (machineId/qimei36 повторное использование),
+// Идемпотентность: один аккаунт каждый раз генерирует одно значение, эмуляция фиксированного устройства.
 func deriveID(a *auth.Auth, salt string) string {
 	sum := sha256.Sum256([]byte(salt + ":" + a.UID))
 	return hex.EncodeToString(sum[:18]) // 36 hex chars
 }
 
-// DesktopEvent 桌面端事件：业务字段任意（map），公共指纹由 ReportDesktopEvent 注入。
+// DesktopEvent событие десктопа: любые бизнес-поля (map），Общий fingerprint формируется из ReportDesktopEvent Инъекция.
 type DesktopEvent map[string]any
 
-// desktopFingerprint 公共桌面指纹字段（注入每个事件，覆盖同名业务键）。
+// desktopFingerprint Поле отпечатка общего десктопа (инжектится в каждое событие, перекрывает одноименный бизнес-ключ).
 func desktopFingerprint(a *auth.Auth) map[string]any {
 	now := time.Now().UnixMilli()
 	return map[string]any{
-		"timezone":     "Asia/Shanghai",
-		"reportDelay":  2000,
-		"userId":       a.UID,
-		"username":     a.Nickname,
+		"timezone": "Asia/Shanghai",
+		"reportDelay": 2000,
+		"userId": a.UID,
+		"username": a.Nickname,
 		"userNickname": a.Nickname,
-		"product":      "SaaS",
-		"releaseDate":  int64(1789036585355),
-		"commit":       "5f9692923c93033111c51ad7b003eb80204a9b75",
-		"ideName":      "WorkBuddy",
-		"ideType":      "WorkBuddy",
-		"ideVersion":   "5.5.6",
-		"machineId":    deriveID(a, "machine"),
-		"sessionId":    deriveID(a, "session"),
-		"extName":      "workbuddy-desktop",
-		"extVersion":   "5.5.6",
-		"os":           "win32",
-		"arch":         "x64",
-		"osVersion":    "10.0.26220",
-		"cpuCores":     20,
-		"memorySize":   24,
-		"timestamp":    now,
-		"presentAt":    now,
+		"product": "SaaS",
+		"releaseDate": int64(1789036585355),
+		"commit": "5f9692923c93033111c51ad7b003eb80204a9b75",
+		"ideName": "WorkBuddy",
+		"ideType": "WorkBuddy",
+		"ideVersion": "5.5.6",
+		"machineId": deriveID(a, "machine"),
+		"sessionId": deriveID(a, "session"),
+		"extName": "workbuddy-desktop",
+		"extVersion": "5.5.6",
+		"os": "win32",
+		"arch": "x64",
+		"osVersion": "10.0.26220",
+		"cpuCores": 20,
+		"memorySize": 24,
+		"timestamp": now,
+		"presentAt": now,
 	}
 }
 
-// ReportDesktopEvent 以桌面客户端指纹向 copilot.tencent.com/v2/report 批量上报事件。
-// events 为业务载荷（eventCode 等字段由调用方给出）；公共指纹自动注入，
-// 业务字段优先（可用于覆盖 qimei36/machineId 等设备标识做真实设备对齐）。
+// ReportDesktopEvent Отпечатком десктоп-клиента к copilot.tencent.com/v2/report пакетная отправка событий.
+// events как бизнес-нагрузка (eventCode и т.д. задаются вызывающей стороной); общий отпечаток инжектируется автоматически,
+// приоритет бизнес-полей (можно переопределить qimei36/machineId и др. идентификаторы устройства для привязки к реальному устройству).
 func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error {
 	if len(events) == 0 {
 		return fmt.Errorf("desktop report: no events")
@@ -126,10 +126,10 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	return err
 }
 
-// DesktopChatSequence 构造一次「桌面端成功对话」的完整事件链
+// DesktopChatSequence Сконструировать полную цепочку событий "успешного диалога на десктопе»
 // （agent_task_created → chat_message_send → chat_request_send →
 // chat_message_response(isSuccessful) → chat_message_status → chat_request_response）。
-// 实测该链点亮 RichMeow_Chat。conversationID/requestID/messageID 由调用方生成。
+// Цепочка фактически подсвечена RichMeow_Chat。conversationID/requestID/messageID Генерируется вызывающей стороной.
 func DesktopChatSequence(conversationID, requestID, messageID, modelID, modelName string) []DesktopEvent {
 	uuid := func() string { return requestID }
 	mk := func(code string, extra map[string]any) DesktopEvent {
@@ -157,7 +157,7 @@ func DesktopChatSequence(conversationID, requestID, messageID, modelID, modelNam
 			"isContextTruncated": false, "currentStepCount": 1,
 			"traceId": uuid(), "rootRequestId": requestID,
 			"parentConversationId": conversationID,
-			"agentName":            "cli", "agentType": "main",
+			"agentName": "cli", "agentType": "main",
 		}),
 		mk("chat_request_send", map[string]any{
 			"inputLength": 24, "isPlan": false, "isAutoExecuteTerminal": false,
@@ -168,8 +168,8 @@ func DesktopChatSequence(conversationID, requestID, messageID, modelID, modelNam
 			"recommendId": "", "skillId": "", "skillCount": 0, "totalCount": 0,
 			"traceId": uuid(), "rootRequestId": requestID,
 			"parentConversationId": conversationID,
-			"agentName":            "cli", "agentType": "main",
-			"codebuddy.session_id":              conversationID,
+			"agentName": "cli", "agentType": "main",
+			"codebuddy.session_id": conversationID,
 			"codebuddy.conversation_request_id": requestID,
 		}),
 		mk("chat_message_response", map[string]any{
@@ -179,16 +179,16 @@ func DesktopChatSequence(conversationID, requestID, messageID, modelID, modelNam
 			"isSuccessful": true, "messageErrorCode": "", "finishReason": "stop",
 			"firstTokenAt": time.Now().UnixMilli(), "traceId": uuid(),
 			"conversationId": conversationID,
-			"rootRequestId":  requestID, "parentConversationId": conversationID,
+			"rootRequestId": requestID, "parentConversationId": conversationID,
 			"agentName": "cli", "agentType": "main",
-			"codebuddy.session_id":              conversationID,
+			"codebuddy.session_id": conversationID,
 			"codebuddy.conversation_request_id": requestID,
 		}),
 		mk("chat_message_status", map[string]any{
 			"messageId": messageID + "-assistant", "messageErrorCode": "0",
 			"traceId": uuid(), "rootRequestId": requestID,
 			"parentConversationId": conversationID,
-			"agentName":            "cli", "agentType": "main",
+			"agentName": "cli", "agentType": "main",
 		}),
 		mk("chat_request_response", map[string]any{
 			"mode": "craft", "toolCallCount": 0,
@@ -200,9 +200,9 @@ func DesktopChatSequence(conversationID, requestID, messageID, modelID, modelNam
 	}
 }
 
-// SetAppearanceTheme 应用外观主题（实测：POST copilot.tencent.com/v2/user-asset/appearance/set，
-// 和品主题 resource_key 为 "theme-tkmw7j"，浅色 "light"、深色 "dark"）。纯 API set 不计
-// Hp_Appearance 分（需客户端切主题后真实活跃），保留供调色/还原与后续验证用。
+// SetAppearanceTheme тема оформления приложения (факт.:POST copilot.tencent.com/v2/user-asset/appearance/set，
+// и тема продукта resource_key для "theme-tkmw7j«，светлый "light"、Тёмная "dark"）。Чистый API set не учитывать
+// Hp_Appearance мин (требуется реальная активность после смены темы клиентом), оставлено для подбора палитры/Для восстановления и последующей верификации.
 func (c *Client) SetAppearanceTheme(a *auth.Auth, resourceKey string) error {
 	body := map[string]string{"kind": "theme", "resource_key": resourceKey}
 	raw, err := json.Marshal(body)
@@ -225,10 +225,10 @@ func (c *Client) SetAppearanceTheme(a *auth.Auth, resourceKey string) error {
 	return err
 }
 
-// DesktopBuddyAppSequence 构造「进入 Buddy 应用」五连事件（实测两账号纯 API 点亮
-// Buddy_App 与 Buddy_App_QQ）：discover → show → enter_click → auth_confirm →
-// bindaccount_skip。buddyID 固定用企鹅教师助手 cb_y5Dy46tPQGGWtueMxXbe
-// （Buddy_App_QQ 的判据应用），同时满足 Buddy_App「进入任一应用」。
+// DesktopBuddyAppSequence Формирование сигнала "вход в Buddy приложения» 5 подряд событий (факт. замер два аккаунта чисто API Подсветить
+// Buddy_App и Buddy_App_QQ）：discover → show → enter_click → auth_confirm →
+// bindaccount_skip。buddyID Фиксированно использовать помощника Penguin Teacher cb_y5Dy46tPQGGWtueMxXbe
+// （Buddy_App_QQ применение критерия), при одновременном выполнении Buddy_App「войти в любое приложение».
 func DesktopBuddyAppSequence(buddyID, buddyName string) []DesktopEvent {
 	mk := func(code string, extra map[string]any) DesktopEvent {
 		ev := DesktopEvent{
@@ -249,8 +249,8 @@ func DesktopBuddyAppSequence(buddyID, buddyName string) []DesktopEvent {
 	}
 }
 
-// DesktopAutomationCreateEvent 构造「定时任务创建成功」事件（实测两账号纯 API
-// 点亮 automation_1）。name 为任务名，可与真实创建语义对齐。
+// DesktopAutomationCreateEvent Сконструировать событие "Задание по расписанию успешно создано» (фактически два аккаунта чисто API
+// Подсветить automation_1）。name — имя задачи, может совпадать с семантикой реального создания.
 func DesktopAutomationCreateEvent(name string) DesktopEvent {
 	return DesktopEvent{
 		"eventCode": "automated_task_create_suc", "name": name,
@@ -260,9 +260,9 @@ func DesktopAutomationCreateEvent(name string) DesktopEvent {
 	}
 }
 
-// ReportWebEvent 以 Web 端指纹向 www.workbuddy.cn/v2/report 上报单事件。
-// 与桌面指纹（copilot 域）不同：web 域事件是浏览器形状（os/machineId/userAgent），
-// 用于 Library_read 等页面行为类任务（实测 library_doc_intro_click 4 秒点亮）。
+// ReportWebEvent по Web отпечаток терминала к www.workbuddy.cn/v2/report Отчёт по одиночному событию.
+// и отпечаток десктопа (copilot домена) отличается:web Домейн-событие в форме браузера (os/machineId/userAgent），
+// Используется для Library_read и другие задачи поведения на странице (факт. library_doc_intro_click 4 сек. подсветка).
 func (c *Client) ReportWebEvent(a *auth.Auth, eventCode, pageURL, elementID, elementName string) error {
 	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
 	ev := map[string]any{
@@ -295,15 +295,15 @@ func (c *Client) ReportWebEvent(a *auth.Auth, eventCode, pageURL, elementID, ele
 }
 
 // ---------------------------------------------------------------------------
-// 2026-09-12 第五轮：客户端 asar 逆向 + Sunny 真实样本驱动的新判据（三账号实测点亮）。
-// 来源：WorkBuddy.exe 5.5.6 app.asar 渲染层事件枚举/载荷 + 抓包真实专家召唤样本
+// 2026-09-12 пятый раунд: клиент asar обратный + Sunny новый критерий на реальных выборках (подтверждено на 3 аккаунтах).
+// Источник:WorkBuddy.exe 5.5.6 app.asar Перечисление событий слоя рендеринга/Пейлоад + Захват реальных сэмплов вызова эксперта
 // （data/desktop-task-protocol.md §7.3）。
 // ---------------------------------------------------------------------------
 
-// DesktopTemplateUseSequence 构造「使用模板创建任务」事件组（实测 template_5 计数）：
+// DesktopTemplateUseSequence Сформировать группу событий "Создание задачи из шаблона» (факт. template_5 подсчёт):
 // agent_task_created_with_template {mode,isCustomModel,id,name,requestId} +
-// template_used {template_id,task_mode}，JOIN 一条完整 chat 链。
-// 三账号实测：5 组（不同模板）一次上报 → 5/5 点亮。
+// template_used {template_id,task_mode}，JOIN Одна полная chat Цепочка.
+// фактические замеры трёх аккаунтов:5 группа (разные шаблоны) — один отчёт → 5/5 подсветить.
 func DesktopTemplateUseSequence(conversationID, requestID, templateID, templateName string) []DesktopEvent {
 	events := DesktopChatSequence(conversationID, requestID, "msg-"+templateID, "fast-model", "fast-model")
 	events = append(events,
@@ -316,9 +316,9 @@ func DesktopTemplateUseSequence(conversationID, requestID, templateID, templateN
 	return events
 }
 
-// DesktopPlaybookPromptSequence 构造「灵感案例做同款」事件组（实测 playbook_prompt 计数）：
+// DesktopPlaybookPromptSequence Сформировать группу событий "сделать аналог по кейсу-вдохновению» (факт. playbook_prompt подсчёт):
 // web_element_click(playbook_ctaClick) + playbook_cta_click + playbook_prompt_send
-// （Dialog 发送 Prompt，带 conversationId/requestId JOIN chat 链）。三账号实测 1/1 点亮。
+// （Dialog Отправка Prompt，Лента conversationId/requestId JOIN chat цепочка). замер на трёх аккаунтах 1/1 подсветить.
 func DesktopPlaybookPromptSequence(conversationID, requestID, caseID, caseName string) []DesktopEvent {
 	events := DesktopChatSequence(conversationID, requestID, "msg-pb", "fast-model", "fast-model")
 	payload := map[string]any{
@@ -348,9 +348,9 @@ func DesktopPlaybookPromptSequence(conversationID, requestID, caseID, caseName s
 	return events
 }
 
-// DesktopDesignCanvasSequence 构造「设计创意画布」事件组（实测 create_canvas 计数）：
-// wbx_design_canvas_task_create + wbx_design_canvas_open（Ardot create_design 工具
-// 完成时客户端经 metrics 通道上报，同一 /v2/report 端点）。三账号实测 1/1 点亮。
+// DesktopDesignCanvasSequence Формирование группы событий "холст дизайн-креатива» (факт. create_canvas подсчёт):
+// wbx_design_canvas_task_create + wbx_design_canvas_open（Ardot create_design Инструмент
+// При завершении клиент через metrics Отчет канала, один и тот же /v2/report эндпоинт). Проверено на трёх аккаунтах 1/1 подсветить.
 func DesktopDesignCanvasSequence(conversationID, requestID string) []DesktopEvent {
 	events := DesktopChatSequence(conversationID, requestID, "msg-canvas", "fast-model", "fast-model")
 	return append(events,
@@ -366,18 +366,18 @@ func DesktopDesignCanvasSequence(conversationID, requestID string) []DesktopEven
 	)
 }
 
-// MarketExpert 专家市场的单个专家（/portal/operation-platform/market/expert/list 响应子集）。
+// MarketExpert Отдельный эксперт маркета экспертов (/portal/operation-platform/market/expert/list подмножества ответа).
 type MarketExpert struct {
-	ExpertID      string `json:"expert_id"`
-	ExpertType    string `json:"expert_type"`
+	ExpertID string `json:"expert_id"`
+	ExpertType string `json:"expert_type"`
 	DisplayNameZH string `json:"display_name_zh"`
-	ProfessionZH  string `json:"profession_zh"`
-	Version       string `json:"version"`
-	Categories    []any  `json:"categories"`
+	ProfessionZH string `json:"profession_zh"`
+	Version string `json:"version"`
+	Categories []any `json:"categories"`
 }
 
-// MarketExpertList 拉取专家市场真实专家列表（expertType: "agent" 单专家 / "team" 专家团）。
-// expert_actual_use 的判据校验要求 id 是平台上真实存在的专家（编造 id 不计数）。
+// MarketExpertList запросить реальный список экспертов маркета экспертов (expertType: "agent« Один эксперт / "team" группа экспертов).
+// expert_actual_use Требования к проверке критериев id — реально существующий на платформе эксперт (фабрикация id не учитывается).
 func (c *Client) MarketExpertList(a *auth.Auth, expertType string) ([]MarketExpert, error) {
 	body := map[string]any{"page": 1, "page_size": 20, "sort_by": "reco_rank", "sort_order": "desc"}
 	if expertType != "" {
@@ -412,21 +412,21 @@ func (c *Client) MarketExpertList(a *auth.Auth, expertType string) ([]MarketExpe
 	return out.Experts, nil
 }
 
-// DesktopChatWithExpert 发一条真实桌面指纹 chat 请求（可带 X-Expert-Id），从 SSE 流
-// 解析**服务端返回的 requestId**（data.id，如 cmb-xxxx / 32hex）并返回。
-// expert_actual_use 等 JOIN 事件的 requestId 必须是该服务端 id——自造 UUID 不计数
-// （客户端 resolveRealRequestId 同款语义，Sunny row 2113 实证）。
+// DesktopChatWithExpert Отправить реальный десктопный отпечаток chat Запрос (может содержать X-Expert-Id），Из SSE Поток
+// Парсинг**возвращено сервером requestId**（data.id，Например cmb-xxxx / 32hex）и вернуть.
+// expert_actual_use и т.д. JOIN события requestId должен быть именно этот сервер id——самосозданный UUID не учитывается
+// （Клиент resolveRealRequestId Та же семантика,Sunny row 2113 подтверждено).
 func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversationID, requestID string, err error) {
 	conversationID = fmt.Sprintf("wb2api-conv-%d", time.Now().UnixNano())
 	body := map[string]any{
 		"model": "fast-model",
 		"messages": []any{
-			map[string]any{"role": "system", "content": "You are a helpful assistant. 当前处于中文环境，使用简体中文回答。"},
-			map[string]any{"role": "user", "content": "1+1等于几？直接回答。"},
+			map[string]any{"role": "system", "content": "You are a helpful assistant. Сейчас окружение — китайский язык, отвечать на упрощенном китайском."},
+			map[string]any{"role": "user", "content": "1+1равно скольки? Ответь прямо."},
 		},
-		"agent":          "cli",
-		"temperature":    1,
-		"stream":         true,
+		"agent": "cli",
+		"temperature": 1,
+		"stream": true,
 		"stream_options": map[string]any{"include_usage": true},
 	}
 	raw, err := json.Marshal(body)
@@ -474,7 +474,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
 		return "", "", fmt.Errorf("chat http %d: %s", resp.StatusCode, b)
 	}
-	// 从 SSE 流抓第一个 data.id 作为服务端 requestId（读干流避免残留连接）。
+	// Из SSE поток берет первый data.id Как серверная сторона requestId（вычитать поток до конца во избежание зависших соединений).
 	buf := make([]byte, 0, 1<<20)
 	tmp := make([]byte, 8192)
 	searchFrom := 0
@@ -489,9 +489,9 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 				}
 				fmt.Printf("[dbg-rd %d] %q\n", n, dbg)
 			}
-			// 从上次搜索位置继续：SSE 里 `"id":"` 可能先出现在消息 id 等字段，
-			// 若不推进偏移，首个不匹配的 id 会让循环永远重复命中同一位置，
-			// 读满 1MB 后误报"未找到 requestId"。
+			// продолжить с последней позиции поиска:SSE внутри `"id":"` может сначала появиться в сообщении id и т.п. поля,
+			// Если не сдвигать offset, первый несовпадающий id заставит цикл вечно попадать в одну и ту же позицию,
+			// Чтение заполнено 1MB ложное срабатывание после"Не найдено requestId"。
 			if i := bytes.Index(buf[searchFrom:], []byte(`"id":"`)); i >= 0 {
 				abs := searchFrom + i
 				rest := buf[abs+6:]
@@ -511,15 +511,15 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 			break
 		}
 	}
-	return "", "", fmt.Errorf("SSE 中未找到服务端 requestId")
+	return "", "", fmt.Errorf("SSE Сервер не найден в requestId")
 }
 
-// idRegex 服务端 requestId 形状（cmb- 前缀 32hex 或裸 32hex）。
+// idRegex Сервер requestId Форма (cmb- Префикс 32hex или голый 32hex）。
 var idRegex = regexp.MustCompile(`^(cmb-)?[0-9a-f]{32}$`)
 
-// DesktopExpertSummonSequence 构造「召唤平台专家」事件组（expert_summon_click 等），
-// 载荷对齐真实抓包样本（Sunny row 2644）。需配合 DesktopChatWithExpert +
-// DesktopExpertActualUseEvent 完成一次完整「召唤+使用」。
+// DesktopExpertSummonSequence Сконструировать группу событий "вызов эксперта платформы» (expert_summon_click и т.д.),
+// пейлоад выровнен по реальным дампам трафика (Sunny row 2644）。Требует совместного использования с DesktopChatWithExpert +
+// DesktopExpertActualUseEvent Завершить полный "вызов+использование».
 func DesktopExpertSummonSequence(e MarketExpert) []DesktopEvent {
 	cat := "expert-all"
 	if len(e.Categories) > 0 {
@@ -534,7 +534,7 @@ func DesktopExpertSummonSequence(e MarketExpert) []DesktopEvent {
 	return []DesktopEvent{
 		{
 			"eventCode": "web_element_click", "source": e.ExpertID, "type": cat, "version": ver,
-			"elementId": "expert_summon_click", "elementName": "立即召唤",
+			"elementId": "expert_summon_click", "elementName": "немедленный вызов",
 			"pageURL": "/C:/Program%20Files/WorkBuddy/resources/app.asar/renderer/index.html",
 		},
 		{
@@ -549,23 +549,23 @@ func DesktopExpertSummonSequence(e MarketExpert) []DesktopEvent {
 	}
 }
 
-// DesktopExpertActualUseEvent 构造「专家真实使用」事件（expert_5/Expert_team_use_3 计数）。
-// requestID 必须是 DesktopChatWithExpert 返回的服务端 requestId。
+// DesktopExpertActualUseEvent формирование события "реальное использование экспертом» (expert_5/Expert_team_use_3 подсчёт).
+// requestID Должно быть DesktopChatWithExpert возвращаемый сервером requestId。
 func DesktopExpertActualUseEvent(e MarketExpert, conversationID, requestID string) DesktopEvent {
 	ev := desktopExpertActualUse(e, conversationID, requestID)
 	ev["mode"] = "craft"
 	return ev
 }
 
-// DesktopExpertActualUseLocal mode:"LOCAL" 变体（Expert_lighthouse 判据要求 LOCAL，
-// 对齐真实样本 Sunny row 868：轻量云专家使用时 mode=LOCAL、type 为空、cost=0）。
+// DesktopExpertActualUseLocal mode:"LOCAL" Вариант (Expert_lighthouse Требования критерия LOCAL，
+// Выравнивание по реальным сэмплам Sunny row 868：при использовании лёгкого cloud-эксперта mode=LOCAL、type пусто,cost=0）。
 func DesktopExpertActualUseLocal(e MarketExpert, conversationID, requestID string) DesktopEvent {
 	ev := desktopExpertActualUse(e, conversationID, requestID)
 	ev["mode"] = "LOCAL"
 	return ev
 }
 
-// desktopExpertActualUse expert_actual_use 公共载荷。
+// desktopExpertActualUse expert_actual_use Общая нагрузка.
 func desktopExpertActualUse(e MarketExpert, conversationID, requestID string) DesktopEvent {
 	cat := "expert-all"
 	if len(e.Categories) > 0 {
@@ -579,7 +579,7 @@ func desktopExpertActualUse(e MarketExpert, conversationID, requestID string) De
 	}
 	return DesktopEvent{
 		"eventCode": "expert_actual_use",
-		"id":        e.ExpertID, "name": e.DisplayNameZH, "expertTitle": e.ProfessionZH,
+		"id": e.ExpertID, "name": e.DisplayNameZH, "expertTitle": e.ProfessionZH,
 		"type": cat, "expertType": e.ExpertType, "source": "builtin", "version": ver,
 		"cost": 9000, "characterCount": 14,
 		"conversationId": conversationID, "requestId": requestID, "messageId": "msg-" + requestID[len(requestID)-8:],

@@ -6,15 +6,15 @@ import (
 	"testing"
 )
 
-// withGlobalEnabled 临时打开 global realm 开关（生产缺省即开，此辅助仅显式确保），
-// 测试结束复位为开启态（缺省）。
+// withGlobalEnabled Временно открыть global realm переключатель (в проде по умолчанию вкл., этот хелпер лишь явно гарантирует),
+// по завершении теста сброс во включенное состояние (по умолчанию).
 func withGlobalEnabled(t *testing.T) {
 	t.Helper()
 	globalEnabled.Store(true)
 	t.Cleanup(func() { globalEnabled.Store(true) })
 }
 
-// withGlobalDisabled 临时关闭 global realm 开关（逃生门），测试结束复位为开启态（缺省）。
+// withGlobalDisabled Временно отключено global realm Переключатель (аварийный выход), по окончании теста сбрасывается во включённое состояние (по умолчанию).
 func withGlobalDisabled(t *testing.T) {
 	t.Helper()
 	globalEnabled.Store(false)
@@ -60,25 +60,25 @@ func TestRealmDomainFallback(t *testing.T) {
 }
 
 func TestRealmEmptyFallsBackToCN(t *testing.T) {
-	// 开关缺省开启（零回归前提）：空 realm + 空 domain → cn（老 CN 凭证的核心）。
+	// переключатель по умолчанию включён (условие нулевой регрессии): пусто realm + пустой domain → cn（Старый CN ядро учетных данных).
 	a := &Auth{}
 	if got := a.Realm(); got != "cn" {
 		t.Errorf("Realm()=%q want cn", got)
 	}
-	// 显式 global → global（缺省开启，Realm() 不再因"未配置"而恒 cn）。
+	// Явно global → global（по умолчанию включено,Realm() больше не из-за"Не настроено"а константа cn）。
 	ag := &Auth{realm: "global"}
 	if got := ag.Realm(); got != "global" {
 		t.Errorf("Realm()=%q want global", got)
 	}
-	// domain 回落照常（缺省开启识别 workbuddy.ai）。
+	// domain Фолбэк штатно (по умолчанию распознавание включено workbuddy.ai）。
 	ad := &Auth{Domain: "www.workbuddy.ai"}
 	if got := ad.Realm(); got != "global" {
 		t.Errorf("Realm()=%q want global", got)
 	}
 }
 
-// TestRealmDefaultOnForCNZeroRegression 开关缺省开启时，老 CN 凭证（无 realm、无 domain）
-// Realm() 恒为 cn——「默认开启」不影响纯 CN 部署行为。
+// TestRealmDefaultOnForCNZeroRegression При переключателе по умолчанию вкл. старый CN учётные данные (без realm、отсутствует domain）
+// Realm() Всегда равно cn——「включено по умолчанию» не влияет на чистый CN Поведение деплоя.
 func TestRealmDefaultOnForCNZeroRegression(t *testing.T) {
 	withGlobalEnabled(t)
 	cases := []*Auth{
@@ -98,8 +98,8 @@ func TestRealmDefaultOnForCNZeroRegression(t *testing.T) {
 	}
 }
 
-// TestRealmExplicitOffEscapeHatch 逃生门：SetGlobalEnabled(false) 后恒 cn，
-// 即便 realm=global / domain=workbuddy.ai（纯 CN 锁定，与旧缺省行为等价）。
+// TestRealmExplicitOffEscapeHatch Аварийный выход:SetGlobalEnabled(false) после постоянно cn，
+// даже если realm=global / domain=workbuddy.ai（Чистый CN заблокировано, эквивалентно старому поведению по умолчанию).
 func TestRealmExplicitOffEscapeHatch(t *testing.T) {
 	withGlobalDisabled(t)
 	cases := []struct {
@@ -128,7 +128,7 @@ func TestParseNestedRealm(t *testing.T) {
 	if sa.realm != "global" {
 		t.Errorf("nested realm=%q want global", sa.realm)
 	}
-	// 嵌套形显式 realm 空 → 读不到，靠 domain 回落。
+	// Явная вложенная форма realm пустой → не читается, через domain Fallback.
 	raw2 := []byte(`{"auth":{"accessToken":"at","refreshToken":"rt","expiresAt":1},"account":{"uid":"u1"}}`)
 	sa2, err := Parse(raw2)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestParseFlatRealm(t *testing.T) {
 	if !fa.IsGlobal() {
 		t.Error("flat global account IsGlobal()=false want true")
 	}
-	// 扁平形缺 realm 键 → 零值 → CN。
+	// Плоская форма отсутствует realm Клавиша → нулевое значение → CN。
 	flatCN := []byte(`{"accessToken":"at","refreshToken":"rt","expiresAt":1,"uid":"u3"}`)
 	fc, err := Parse(flatCN)
 	if err != nil {
@@ -188,19 +188,19 @@ func TestSaveAtomicWritesRealm(t *testing.T) {
 	}
 }
 
-// TestBackfillRealmDomain CN/global 按原始 domain 推断（backfill 为导出空 realm 字段服务）。
+// TestBackfillRealmDomain CN/global по исходному domain вывод (backfill как пустой экспорт realm сервис полей).
 func TestBackfillRealmDomain(t *testing.T) {
-	t.Parallel() // 不触碰全局开关
+	t.Parallel() // Не трогать глобальный переключатель
 	cases := []struct {
 		domain string
-		want   string
+		want string
 	}{
 		{"www.workbuddy.ai", "global"},
 		{"workbuddy.ai", "global"},
 		{"sub.workbuddy.ai", "global"},
 		{"www.codebuddy.cn", "cn"},
 		{"codebuddy.cn", "cn"},
-		{"", "cn"}, // 空 domain + 空 realm → cn（老 CN 凭证核心）
+		{"", "cn"}, // пустой domain + пустой realm → cn（Старый CN ядро учётных данных)
 	}
 	for _, c := range cases {
 		a := &Auth{Domain: c.domain}
@@ -215,9 +215,9 @@ func TestBackfillRealmDomain(t *testing.T) {
 	}
 }
 
-// TestBackfillRealmEscapeHatchFree 逃生门关闭时 backfill 仍按原始 domain 推断（不受 Realm() 降级影响）。
+// TestBackfillRealmEscapeHatchFree при закрытой аварийной лазейке backfill всё равно по исходному domain Вывод (не зависит от Realm() влияние даунгрейда).
 func TestBackfillRealmEscapeHatchFree(t *testing.T) {
-	withGlobalDisabled(t) // 逃生门关闭：Realm() 恒 cn，但 backfill 不得被污染
+	withGlobalDisabled(t) // Аварийный выход закрыт:Realm() Конст. cn，Но backfill не должно быть загрязнено
 	a := &Auth{Domain: "www.workbuddy.ai"}
 	if g := a.Realm(); g != "cn" {
 		t.Fatalf("precondition Realm()=%q want cn (escape hatch on)", g)
@@ -232,10 +232,10 @@ func TestBackfillRealmEscapeHatchFree(t *testing.T) {
 	}
 }
 
-// TestBackfillRealmIdempotent 已有 realm 标识的文件不做修改（幂等）。
+// TestBackfillRealmIdempotent уже есть realm файлы с меткой не модифицируются (идемпотентно).
 func TestBackfillRealmIdempotent(t *testing.T) {
 	t.Parallel()
-	a := &Auth{Domain: "www.workbuddy.ai", realm: "cn"} // 已有 cn，domain 会推断 global——绝不覆盖
+	a := &Auth{Domain: "www.workbuddy.ai", realm: "cn"} // уже есть cn，domain будет выведено global——никогда не перезаписывать
 	changed, got := a.BackfillRealm()
 	if changed {
 		t.Errorf("backfill changed=true want false (existing realm must win)")
@@ -253,19 +253,19 @@ func assertRealmStored(a *Auth, want string, t *testing.T) {
 	}
 }
 
-// TestResolveRealm 纯函数归一化显式 realm，缺失时按 domain 推断（与 BackfillRealm
-// 共用同一来源；不受逃生门影响）。显式值优先于 domain 推断。
+// TestResolveRealm чистая функция, нормализация явная realm，При отсутствии по domain вывод (с BackfillRealm
+// Общий источник; не зависит от аварийного выхода). Явное значение приоритетнее domain Инференс.
 func TestResolveRealm(t *testing.T) {
-	t.Parallel() // 纯函数：不触碰全局开关
+	t.Parallel() // Чистая функция: не трогает глобальные переключатели
 	cases := []struct {
 		explicit, domain, want string
 	}{
-		{"global", "www.codebuddy.cn", "global"}, // 显式优先：cn domain 也写 global
-		{"cn", "www.workbuddy.ai", "cn"},         // 显式优先：global domain 也写 cn
-		{"", "www.workbuddy.ai", "global"},       // 缺省按 domain 推断
+		{"global", "www.codebuddy.cn", "global"}, // Явный приоритет:cn domain также записать global
+		{"cn", "www.workbuddy.ai", "cn"}, // Явный приоритет:global domain также записать cn
+		{"", "www.workbuddy.ai", "global"}, // По умолчанию по domain инференс
 		{"", "workbuddy.ai", "global"},
 		{"", "codebuddy.cn", "cn"},
-		{"", "", "cn"}, // 空 domain → cn（老 CN 凭证零回归）
+		{"", "", "cn"}, // пустой domain → cn（Старый CN возврат учётных данных к нулю)
 	}
 	for _, c := range cases {
 		if got := ResolveRealm(c.explicit, c.domain); got != c.want {

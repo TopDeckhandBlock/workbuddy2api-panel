@@ -32,22 +32,22 @@ func TestArchiveRotationReadAndFilter(t *testing.T) {
 	base := time.Now().Add(-time.Minute)
 	for i := 0; i < 12; i++ {
 		r.Record(Event{
-			Time:       base.Add(time.Duration(i) * time.Second),
-			RequestID:  "multi-" + string(rune('a'+i)),
-			Model:      "glm-5.3",
-			Account:    "账号(uid8)",
-			Status:     200,
-			OK:         true,
-			Outcome:    OutcomeSuccess,
+			Time: base.Add(time.Duration(i) * time.Second),
+			RequestID: "multi-" + string(rune('a'+i)),
+			Model: "glm-5.3",
+			Account: "Аккаунт(uid8)",
+			Status: 200,
+			OK: true,
+			Outcome: OutcomeSuccess,
 			DurationMs: int64(i + 1),
 		})
 	}
 	r.Record(Event{
-		Time:       base.Add(20 * time.Second),
-		RequestID:  "other",
-		Model:      "other-model",
-		Status:     500,
-		Outcome:    OutcomeHTTPError,
+		Time: base.Add(20 * time.Second),
+		RequestID: "other",
+		Model: "other-model",
+		Status: 500,
+		Outcome: OutcomeHTTPError,
 		DurationMs: 99,
 	})
 	r.Close()
@@ -65,7 +65,7 @@ func TestArchiveRotationReadAndFilter(t *testing.T) {
 	}
 }
 
-// 来源字段随事件落盘并可被 client_ip / user_agent 过滤（包含匹配、大小写不敏感）。
+// Поле источника сохраняется вместе с событием и может быть client_ip / user_agent Фильтрация (совпадение по вхождению, без учёта регистра).
 func TestArchiveFilterByClientInfo(t *testing.T) {
 	dir := t.TempDir()
 	r := New(Config{Enabled: true, Dir: dir, MaxBytes: 1 << 20, RetentionDays: 7})
@@ -94,7 +94,7 @@ func TestArchiveFilterByClientInfo(t *testing.T) {
 		t.Fatalf("user agent not persisted: %+v", got[0])
 	}
 
-	// UA 片段过滤大小写不敏感（面板搜索框直接传用户输入）。
+	// UA фильтрация фрагментов без учета регистра (поле поиска панели передает ввод пользователя напрямую).
 	got, err = r.ReadArchive(10, Filter{UserAgent: "chrome/120"})
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestArchiveFilterByClientInfo(t *testing.T) {
 		t.Fatalf("ua filter = %+v", got)
 	}
 
-	// 来源为空的旧事件不该被非空来源条件误命中。
+	// Старые события с пустым источником не должны попадать под условие непустого источника.
 	got, err = r.ReadArchive(10, Filter{ClientIP: "10.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestArchiveFilterByClientInfo(t *testing.T) {
 	}
 }
 
-// 时间区间过滤（「今天」/「自定义」）：闭区间，任一侧为零值即该侧不设界。
+// Фильтр по временному интервалу ("сегодня»/「Пользовательский»): закрытый интервал, ноль с любой стороны — граница не задана.
 func TestArchiveFilterByTimeRange(t *testing.T) {
 	dir := t.TempDir()
 	r := New(Config{Enabled: true, Dir: dir, MaxBytes: 1 << 20, RetentionDays: 30})
@@ -135,9 +135,9 @@ func TestArchiveFilterByTimeRange(t *testing.T) {
 	for _, e := range rows {
 		got = append(got, e.RequestID)
 	}
-	// 倒序返回，闭区间命中 d2、d1。
+	// возврат в обратном порядке, попадание по замкнутому интервалу d2、d1。
 	if len(got) != 2 || got[0] != "d1" || got[1] != "d2" {
-		t.Fatalf("时间区间过滤 = %v, want [d1 d2]", got)
+		t.Fatalf("фильтрация по временному интервалу = %v, want [d1 d2]", got)
 	}
 
 	onlyFrom, err := r.ReadArchive(10, Filter{From: base.Add(48 * time.Hour)})
@@ -145,7 +145,7 @@ func TestArchiveFilterByTimeRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(onlyFrom) != 2 || onlyFrom[0].RequestID != "now" {
-		t.Fatalf("仅 From 过滤 = %+v, want 2 条（d1、now）", onlyFrom)
+		t.Fatalf("Только From Фильтрация = %+v, want 2 записей (d1、now）", onlyFrom)
 	}
 
 	onlyTo, err := r.ReadArchive(10, Filter{To: base})
@@ -153,10 +153,10 @@ func TestArchiveFilterByTimeRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(onlyTo) != 1 || onlyTo[0].RequestID != "d3" {
-		t.Fatalf("仅 To 过滤 = %+v, want 仅 d3", onlyTo)
+		t.Fatalf("Только To Фильтрация = %+v, want Только d3", onlyTo)
 	}
 
-	// 时间区间与其它条件是与关系。
+	// временной интервал и прочие условия — через И.
 	combined, err := r.ReadArchive(10, Filter{
 		From: base.Add(24 * time.Hour), To: base.Add(48 * time.Hour), Outcome: OutcomeHTTPError,
 	})
@@ -164,14 +164,14 @@ func TestArchiveFilterByTimeRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(combined) != 0 {
-		t.Fatalf("区间+结果组合应为空（这几条都是成功）: %+v", combined)
+		t.Fatalf("Интервал+комбинация результатов должна быть пустой (все эти — успех): %+v", combined)
 	}
 }
 
 func TestArchiveQueueDropCounter(t *testing.T) {
 	w := &archiveWriter{
-		cfg:  Config{Enabled: true, Dir: t.TempDir()},
-		ch:   make(chan Event, 1),
+		cfg: Config{Enabled: true, Dir: t.TempDir()},
+		ch: make(chan Event, 1),
 		done: make(chan struct{}),
 	}
 	w.ch <- Event{RequestID: "occupied"}

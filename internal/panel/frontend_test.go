@@ -12,12 +12,12 @@ import (
 	"time"
 )
 
-// TestAppJSSyntax app.js 必须能通过 JS 解析器语法校验。
+// TestAppJSSyntax app.js должен проходить JS синтаксическая проверка парсера.
 //
-// 为什么需要：app.js 是 go:embed 进二进制的静态资源，Go 编译器不检查其内容——
-// 一次对象字面量键名未加引号（Model_chat_GLM5.2 被解析成属性访问 + 数字字面量）
-// 就让整个面板白屏，而所有 Go 测试依然全绿。此测试把语法校验前移到 CI。
-// 无 node 环境时跳过（不阻塞无 Node 的构建机）。
+// зачем нужно:app.js Да go:embed Статические ресурсы в бинарнике,Go компилятор не проверяет его содержимое —
+// ключ литерала объекта без кавычек (Model_chat_GLM5.2 Парсится как обращение к свойству + числовой литерал)
+// вызовет белый экран всей панели, а все Go тесты всё ещё зелёные. Тест переносит синтаксическую валидацию раньше в CI。
+// отсутствует node Пропуск в окружении (не блокирует отсутствие Node сборочной машины).
 func TestAppJSSyntax(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -33,9 +33,9 @@ func TestAppJSSyntax(t *testing.T) {
 	}
 }
 
-// TestIndexHTMLNoInlineScript index.html 不得含内联 <script> 块：
-// 严格 CSP（script-src 'self'）会拦截内联脚本，页面将完全不可用。
-// 外链形式 <script src="..."> 允许。
+// TestIndexHTMLNoInlineScript index.html не должен содержать inline <script> блок:
+// Строго CSP（script-src 'self'）будет блокировать инлайн-скрипты, страница станет полностью недоступна.
+// форма внешней ссылки <script src="..."> Разрешено.
 func TestIndexHTMLNoInlineScript(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
@@ -61,11 +61,11 @@ func TestIndexHTMLNoInlineScript(t *testing.T) {
 	}
 }
 
-// TestAppJSTopLevelSmoke app.js 顶层求值冒烟（v1.11.3/1.11.4 两连炸后补的运行时闸门）：
-// node + DOM 桩执行 app.js（含按 hash 落到各视图的 go() 顶层调用），抓 TDZ/
-// ReferenceError 类运行时错误——Go 侧 frontend_test 不执行 JS，语法层检查对此全盲。
-// 无 node 的环境跳过（CI/精简机不受影响）；harness 与 app.js 同判（app.js 顶层
-// start() 的 setInterval 会让 node 事件循环不退出，故成功路径显式 exit(0)）。
+// TestAppJSTopLevelSmoke app.js дым-тест вычисления верхнего уровня (v1.11.3/1.11.4 рантайм-шлюз, добавленный после двух подряд сбоев):
+// node + DOM выполнение заглушки app.js（включая по hash попадающее в представления go() вызов верхнего уровня), перехватить TDZ/
+// ReferenceError ошибка рантайма класса —Go Боковой frontend_test Не выполнять JS，проверка на уровне синтаксиса это полностью игнорирует.
+// отсутствует node пропуск окружения (CI/легковесный движок не затрагивается);harness и app.js считается одинаковым (app.js Верхний уровень
+// start() setInterval Приведёт к node Цикл событий не завершается, поэтому успешный путь явно exit(0)）。
 func TestAppJSTopLevelSmoke(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -75,33 +75,33 @@ func TestAppJSTopLevelSmoke(t *testing.T) {
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const inert = new Proxy(function () {}, {
-  get(t, k) { if (k === Symbol.toPrimitive) return () => ''; return inert; },
-  set() { return true; },
-  apply() { return inert; },
-  construct() { return inert; },
-  has() { return true; },
+ get(t, k) { if (k === Symbol.toPrimitive) return () => ''; return inert; },
+ set() { return true; },
+ apply() { return inert; },
+ construct() { return inert; },
+ has() { return true; },
 });
 const sandbox = new Proxy({
-  location: { hash: process.env.SMOKE_HASH || '#taskscenter' },
-  history: { replaceState() {} },
-  localStorage: { getItem: () => null, setItem() {} },
-  navigator: { clipboard: { writeText: () => Promise.resolve() } },
-  document: { querySelectorAll: () => [], querySelector: () => inert, getElementById: () => inert, addEventListener() {}, documentElement: inert, head: inert, body: inert, createElement: () => inert, cookie: '' },
-  fetch: () => new Promise(() => {}),
-  addEventListener() {}, removeEventListener() {},
-  matchMedia: () => ({ matches: false, addEventListener() {} }),
-  setInterval, clearInterval, setTimeout, clearTimeout,
-  console, JSON, Math, Date, Number, String, Boolean, Object, Array, Promise, Map, Set, RegExp, Error, TypeError, isNaN, parseInt, parseFloat, encodeURIComponent, decodeURIComponent, URL, Symbol, Proxy, Reflect,
+ location: { hash: process.env.SMOKE_HASH || '#taskscenter' },
+ history: { replaceState() {} },
+ localStorage: { getItem: () => null, setItem() {} },
+ navigator: { clipboard: { writeText: () => Promise.resolve() } },
+ document: { querySelectorAll: () => [], querySelector: () => inert, getElementById: () => inert, addEventListener() {}, documentElement: inert, head: inert, body: inert, createElement: () => inert, cookie: '' },
+ fetch: () => new Promise(() => {}),
+ addEventListener() {}, removeEventListener() {},
+ matchMedia: () => ({ matches: false, addEventListener() {} }),
+ setInterval, clearInterval, setTimeout, clearTimeout,
+ console, JSON, Math, Date, Number, String, Boolean, Object, Array, Promise, Map, Set, RegExp, Error, TypeError, isNaN, parseInt, parseFloat, encodeURIComponent, decodeURIComponent, URL, Symbol, Proxy, Reflect,
 }, { get(t, k) { return t[k]; }, has() { return true; } });
 sandbox.window = sandbox; sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 try {
-  vm.runInContext(src, sandbox, { filename: 'app.js' });
-  console.log('SMOKE OK');
-  process.exit(0);
+ vm.runInContext(src, sandbox, { filename: 'app.js' });
+ console.log('SMOKE OK');
+ process.exit(0);
 } catch (e) {
-  console.log('SMOKE FAIL:', (e && e.stack ? e.stack : e).toString().split('\n').slice(0, 5).join('\n'));
-  process.exit(1);
+ console.log('SMOKE FAIL:', (e && e.stack ? e.stack : e).toString().split('\n').slice(0, 5).join('\n'));
+ process.exit(1);
 }
 `
 	hf, err := os.CreateTemp(t.TempDir(), "smoke-*.cjs")
@@ -114,19 +114,19 @@ try {
 	hf.Close()
 	for _, hash := range []string{"#taskscenter", "#accounts", "#usage", "#models", "#config", "#logs", "#packages"} {
 		cmd := exec.Command(node, hf.Name(), "app.js")
-		cmd.Dir = "." // 测试工作目录 = internal/panel
+		cmd.Dir = "." // Рабочий каталог тестов = internal/panel
 		cmd.Env = append(os.Environ(), "SMOKE_HASH="+hash)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("app.js 顶层求值 %s 崩溃: %v\n%s", hash, err, out)
+			t.Fatalf("app.js Вычисление на верхнем уровне %s Крэш: %v\n%s", hash, err, out)
 		}
 		if !bytes.Contains(out, []byte("SMOKE OK")) {
-			t.Fatalf("app.js smoke %s 未通过:\n%s", hash, out)
+			t.Fatalf("app.js smoke %s не пройдено:\n%s", hash, out)
 		}
 	}
 }
 
-// 积分扣除维度的格式必须稳定，且缺样本/缺匹配 Token 时不能伪造比例。
+// Формат измерения списания баллов должен быть стабильным, и при отсутствии выборки/Нет совпадения Token нельзя подделать пропорцию.
 func TestAppJSCreditDimensionFormatting(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -141,19 +141,19 @@ if (start < 0 || end < 0) throw new Error('credit helpers not found');
 const ctx = { Number, String, RegExp };
 vm.createContext(ctx);
 vm.runInContext(
-  src.slice(start, end) +
-  '\nthis.fmtCredit=fmtCredit; this.fmtCreditRatio=fmtCreditRatio; this.fmtModelRate=fmtModelRate;',
-  ctx
+ src.slice(start, end) +
+ '\nthis.fmtCredit=fmtCredit; this.fmtCreditRatio=fmtCreditRatio; this.fmtModelRate=fmtModelRate;',
+ ctx
 );
 process.stdout.write(JSON.stringify({
-  credit: ctx.fmtCredit(1.25),
-  zero: ctx.fmtCredit(0),
-  hundred: ctx.fmtCredit(100),
-  ratio: ctx.fmtCreditRatio(12.5, 2, 400),
-  noSamples: ctx.fmtCreditRatio(12.5, 0, 400),
-  noTokens: ctx.fmtCreditRatio(12.5, 2, 0),
-  rate: ctx.fmtModelRate('0.5'),
-  noRate: ctx.fmtModelRate(''),
+ credit: ctx.fmtCredit(1.25),
+ zero: ctx.fmtCredit(0),
+ hundred: ctx.fmtCredit(100),
+ ratio: ctx.fmtCreditRatio(12.5, 2, 400),
+ noSamples: ctx.fmtCreditRatio(12.5, 0, 400),
+ noTokens: ctx.fmtCreditRatio(12.5, 2, 0),
+ rate: ctx.fmtModelRate('0.5'),
+ noRate: ctx.fmtModelRate(''),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "credit-format-*.cjs")
 	if err != nil {
@@ -173,7 +173,7 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
-// 模型限流时间必须同时支持上游 reset_at、网关 until 和无重置时间三种形态。
+// Время rate-limit модели должно поддерживать и апстрим reset_at、Шлюз until и без времени сброса — три формы.
 func TestAppJSRateLimitMeta(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -195,9 +195,9 @@ const rate = ctx.rateLimitMeta({ model: 'glm-5.3', kind: 'rate_limit', reset_at:
 const unavailable = ctx.rateLimitMeta({ model: 'missing', kind: 'model_unavailable', until: new Date(until).toISOString() }, now);
 const unknown = ctx.rateLimitMeta({ model: 'glm-5.3', kind: 'rate_limit' }, now);
 process.stdout.write(JSON.stringify({
-  rate: rate.detail,
-  unavailable: unavailable.detail,
-  unknown: unknown.detail,
+ rate: rate.detail,
+ unavailable: unavailable.detail,
+ unknown: unknown.detail,
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "rate-limit-format-*.cjs")
 	if err != nil {
@@ -211,13 +211,13 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("rate-limit formatting node test failed: %v\n%s", err, out)
 	}
-	const want = `{"rate":"预计 2026-09-28 16:00 解封（剩余 2时00分） · 网关最快 1时00分 后重试","unavailable":"预计 1时00分 后重试","unknown":"预计解封时间未知"}`
+	const want = `{"rate":"ожидается 2026-09-28 16:00 разблокировка（остаток 2 ч 00 мин） · шлюз самый быстрый 1 ч 00 мин повторить после","unavailable":"ожидается 1 ч 00 мин повторить после","unknown":"ожидаемое время разблокировки неизвестно"}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("rate-limit formatting=%s want %s", out, want)
 	}
 }
 
-// 请求记录行必须紧凑、可读，并带上调用来源（IP / UA）；来源缺失时以 — 兜底。
+// Строка лога запроса должна быть компактной, читаемой и содержать источник вызова (IP / UA）；при отсутствии источника — как — Фолбэк.
 func TestAppJSRequestLogFormatting(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -236,16 +236,16 @@ if ([escStart, escEnd, fmtStart, fmtEnd, reqStart, reqEnd].some(v => v < 0)) thr
 const ctx = { Date, Number, String, Math, RegExp, isNaN };
 vm.createContext(ctx);
 vm.runInContext(
-  src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(reqStart, reqEnd) +
-  '\nthis.requestLogText=requestLogText;',
-  ctx
+ src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(reqStart, reqEnd) +
+ '\nthis.requestLogText=requestLogText;',
+ ctx
 );
 const time = new Date(2026, 8, 28, 14, 5, 6).toISOString();
-const good = { time, status: 200, outcome: 'success', model: 'glm-5.3', account: '账号(uid8)', duration_ms: 1250, total_tokens: 2300, credit_known: true, credit: 0.12, request_id: 'req-1', client_ip: '203.0.113.7', user_agent: 'python-requests/2.31.0' };
+const good = { time, status: 200, outcome: 'success', model: 'glm-5.3', account: 'Аккаунт(uid8)', duration_ms: 1250, total_tokens: 2300, credit_known: true, credit: 0.12, request_id: 'req-1', client_ip: '203.0.113.7', user_agent: 'python-requests/2.31.0' };
 const noSource = { ...good, request_id: 'req-3', client_ip: '', user_agent: '' };
 process.stdout.write(JSON.stringify({
-  good: ctx.requestLogText(good),
-  noSource: ctx.requestLogText(noSource),
+ good: ctx.requestLogText(good),
+ noSource: ctx.requestLogText(noSource),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "request-log-format-*.cjs")
 	if err != nil {
@@ -259,15 +259,15 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("request log formatting node test failed: %v\n%s", err, out)
 	}
-	text := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | req-1"
-	noSource := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | — | — | 1.25s | 2.3k tok | 0.12 credit | req-3"
+	text := "14:05:06 | 200 Успех | glm-5.3 | Аккаунт(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | req-1"
+	noSource := "14:05:06 | 200 Успех | glm-5.3 | Аккаунт(uid8) | — | — | 1.25s | 2.3k tok | 0.12 credit | req-3"
 	want := `{"good":` + strconv.Quote(text) + `,"noSource":` + strconv.Quote(noSource) + `}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("request log formatting=%s want %s", out, want)
 	}
 }
 
-// 请求记录筛选：IP / UA / 模型 / 账号 / 请求 ID 的包含匹配（空格分词 AND）+ 结果精确匹配。
+// Фильтрация записей запросов:IP / UA / Модель / Аккаунт / Запрос ID совпадение по вхождению (токенизация по пробелам AND）+ Точное совпадение результата.
 func TestAppJSRequestMatch(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -282,19 +282,19 @@ if (start < 0 || end < 0) throw new Error('reqMatch not found');
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.reqMatch=reqMatch;', ctx);
-const base = { outcome: 'success', client_ip: '203.0.113.7', user_agent: 'python-requests/2.31.0', model: 'cn:glm-5.3', account: '示例(uid8)', request_id: 'req-1' };
-const other = { outcome: 'http_error', client_ip: '198.51.100.4', user_agent: 'Mozilla/5.0 Chrome/120', model: 'global:hy3', account: '甲(uid9)', request_id: 'req-2' };
+const base = { outcome: 'success', client_ip: '203.0.113.7', user_agent: 'python-requests/2.31.0', model: 'cn:glm-5.3', account: 'Пример(uid8)', request_id: 'req-1' };
+const other = { outcome: 'http_error', client_ip: '198.51.100.4', user_agent: 'Mozilla/5.0 Chrome/120', model: 'global:hy3', account: 'Сторона А(uid9)', request_id: 'req-2' };
 const rows = [base, other];
 const pick = f => rows.filter(e => ctx.reqMatch(e, f)).map(e => e.request_id);
 process.stdout.write(JSON.stringify({
-  all: pick({ q: '', outcome: '' }),
-  byIP: pick({ q: '203.0.113', outcome: '' }),
-  byUA: pick({ q: 'chrome/120', outcome: '' }),
-  byModel: pick({ q: 'glm', outcome: '' }),
-  multiKw: pick({ q: 'glm success', outcome: '' }),
-  multiMiss: pick({ q: 'glm chrome', outcome: '' }),
-  byOutcome: pick({ q: '', outcome: 'http_error' }),
-  combined: pick({ q: '198.51', outcome: 'http_error' }),
+ all: pick({ q: '', outcome: '' }),
+ byIP: pick({ q: '203.0.113', outcome: '' }),
+ byUA: pick({ q: 'chrome/120', outcome: '' }),
+ byModel: pick({ q: 'glm', outcome: '' }),
+ multiKw: pick({ q: 'glm success', outcome: '' }),
+ multiMiss: pick({ q: 'glm chrome', outcome: '' }),
+ byOutcome: pick({ q: '', outcome: 'http_error' }),
+ combined: pick({ q: '198.51', outcome: 'http_error' }),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "request-filter-*.cjs")
 	if err != nil {
@@ -308,14 +308,14 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("request filter node test failed: %v\n%s", err, out)
 	}
-	// q 对 outcome 不参与匹配（outcome 有独立下拉），multiKw 里的 success 命中不了任何字段。
+	// q Для outcome не участвует в матчинге (outcome есть отдельный дропдаун),multiKw внутри success Не попадает ни в одно поле.
 	const want = `{"all":["req-1","req-2"],"byIP":["req-1"],"byUA":["req-2"],"byModel":["req-1"],"multiKw":[],"multiMiss":[],"byOutcome":["req-2"],"combined":["req-2"]}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("request filter=%s want %s", out, want)
 	}
 }
 
-// 模型按条件查询：域 / 能力 / 档位 / 价格 / 关键词，以及倍率、上下文、输出排序。
+// запрос моделей по условию: домен / Возможность / Грейд / Цена / ключевые слова, а также множитель, контекст, сортировка вывода.
 func TestAppJSModelFilter(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -331,33 +331,33 @@ const ctx = { Number, String, Array, Object, isFinite, parseFloat };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.mdMatch=mdMatch; this.mdSortList=mdSortList; this.mdRateValue=mdRateValue;', ctx);
 const models = [
-  { id: 'cn:glm-5.2', name: 'GLM-5.2', vendor: 'Zhipu', tags: ['视觉'], supports_tool_call: true, supports_images: true, supports_reasoning: true, can_disable_thinking: true, supported_efforts: ['high', 'xhigh'], default_effort: 'high', is_default: false, credits: '0.79', promo_factor: 0.5, promo_credits: '0.40', promo_label: '夜间折扣', context_length: 1000000, max_output_tokens: 131000 },
-  { id: 'cn:hy3', name: 'Hy3', supports_tool_call: true, supports_images: true, supports_reasoning: true, can_disable_thinking: false, supported_efforts: ['low', 'high'], default_effort: 'high', is_default: false, credits: '0', promo_factor: 0, promo_credits: '0', promo_label: '限时免费', context_length: 192000, max_output_tokens: 64000 },
-  { id: 'global:hy3', name: 'Hy3 Global', supports_tool_call: false, supports_images: false, supports_reasoning: false, supported_efforts: [], is_default: false, credits: '0.11', context_length: 1000000, max_output_tokens: 393000 },
-  { id: 'cn:auto', name: 'Auto', supports_tool_call: true, supports_images: true, supports_reasoning: true, is_default: true, credits: null, context_length: 256000, max_output_tokens: 32000 },
+ { id: 'cn:glm-5.2', name: 'GLM-5.2', vendor: 'Zhipu', tags: ['Визуал'], supports_tool_call: true, supports_images: true, supports_reasoning: true, can_disable_thinking: true, supported_efforts: ['high', 'xhigh'], default_effort: 'high', is_default: false, credits: '0.79', promo_factor: 0.5, promo_credits: '0.40', promo_label: 'Ночная скидка', context_length: 1000000, max_output_tokens: 131000 },
+ { id: 'cn:hy3', name: 'Hy3', supports_tool_call: true, supports_images: true, supports_reasoning: true, can_disable_thinking: false, supported_efforts: ['low', 'high'], default_effort: 'high', is_default: false, credits: '0', promo_factor: 0, promo_credits: '0', promo_label: 'Бесплатно ограниченное время', context_length: 192000, max_output_tokens: 64000 },
+ { id: 'global:hy3', name: 'Hy3 Global', supports_tool_call: false, supports_images: false, supports_reasoning: false, supported_efforts: [], is_default: false, credits: '0.11', context_length: 1000000, max_output_tokens: 393000 },
+ { id: 'cn:auto', name: 'Auto', supports_tool_call: true, supports_images: true, supports_reasoning: true, is_default: true, credits: null, context_length: 256000, max_output_tokens: 32000 },
 ];
 const ids = list => list.map(m => m.id);
 const filter = f => ids(ctx.mdSortList(models.filter(m => ctx.mdMatch(m, f)), f));
 process.stdout.write(JSON.stringify({
-  all: ids(models),
-  realm: filter({ realm: 'cn' }),
-  tool: filter({ cap: 'tool' }),
-  vision: filter({ cap: 'vision' }),
-  reasoning: filter({ cap: 'reasoning' }),
-  isDefault: filter({ cap: 'default' }),
-  effortOff: filter({ effort: 'off' }),
-  effortLow: filter({ effort: 'low' }),
-  free: filter({ promo: 'free' }),
-  promo: filter({ promo: 'promo' }),
-  discount: filter({ promo: 'discount' }),
-  q: filter({ q: 'glm zhipu' }),
-  qMiss: filter({ q: 'glm nosuch' }),
-  sortRate: filter({ sort: 'rate' }),
-  sortContext: filter({ sort: 'context' }),
-  sortOutput: filter({ sort: 'output' }),
-  sortName: filter({ sort: 'name' }),
-  rateFree: ctx.mdRateValue(models[1]),
-  rateMissing: ctx.mdRateValue(models[3]),
+ all: ids(models),
+ realm: filter({ realm: 'cn' }),
+ tool: filter({ cap: 'tool' }),
+ vision: filter({ cap: 'vision' }),
+ reasoning: filter({ cap: 'reasoning' }),
+ isDefault: filter({ cap: 'default' }),
+ effortOff: filter({ effort: 'off' }),
+ effortLow: filter({ effort: 'low' }),
+ free: filter({ promo: 'free' }),
+ promo: filter({ promo: 'promo' }),
+ discount: filter({ promo: 'discount' }),
+ q: filter({ q: 'glm zhipu' }),
+ qMiss: filter({ q: 'glm nosuch' }),
+ sortRate: filter({ sort: 'rate' }),
+ sortContext: filter({ sort: 'context' }),
+ sortOutput: filter({ sort: 'output' }),
+ sortName: filter({ sort: 'name' }),
+ rateFree: ctx.mdRateValue(models[1]),
+ rateMissing: ctx.mdRateValue(models[3]),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "model-filter-*.cjs")
 	if err != nil {
@@ -394,9 +394,9 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
-// 用量时序图的柱体类名不得叫 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
-// height 是 rect 的 CSS 几何属性——同名类会把每根柱子压成 3px 高，图看起来"没数据"。
-// 这个坑只能在浏览器里看出来，所以在这里钉住类名。
+// Имя класса столбцов графика использования по времени не должно называться bar：Полоска баллов пула аккаунтов — это .bar{height:3px}，И SVG2 внутри
+// height Да rect CSS геометрия — одноименный класс сплющит каждый столбец в 3px высоко, график выглядит"нет данных"。
+// Этот баг виден только в браузере, поэтому здесь фиксируем имя класса.
 func TestAppJSUsageChartBarClass(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -414,28 +414,28 @@ const fmtEnd = src.indexOf('function usStat(');
 if ([start, end, escStart, escEnd, fmtStart, fmtEnd].some(v => v < 0)) throw new Error('usage chart helpers not found');
 const host = { innerHTML: '', textContent: '' };
 const ctx = {
-  Date, Number, String, Math, RegExp, isNaN, Set, Array, Object, Infinity,
-  document: { getElementById: () => host },
-  $: () => host,
+ Date, Number, String, Math, RegExp, isNaN, Set, Array, Object, Infinity,
+ document: { getElementById: () => host },
+ $: () => host,
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
-  '\nthis.renderUsageChart=renderUsageChart;', ctx);
+ '\nthis.renderUsageChart=renderUsageChart;', ctx);
 const series = [
-  { t: '2026-09-30T09', scope: 'hour', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
-  { t: '2026-09-30T11', scope: 'hour', prompt_tokens: 978324, completion_tokens: 20621, total_tokens: 998945, requests: 39 },
-  { t: '2026-09-30T13', scope: 'hour', prompt_tokens: 27400952, completion_tokens: 104913, total_tokens: 27505865, requests: 200 },
+ { t: '2026-09-30T09', scope: 'hour', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
+ { t: '2026-09-30T11', scope: 'hour', prompt_tokens: 978324, completion_tokens: 20621, total_tokens: 998945, requests: 39 },
+ { t: '2026-09-30T13', scope: 'hour', prompt_tokens: 27400952, completion_tokens: 104913, total_tokens: 27505865, requests: 200 },
 ];
 ctx.renderUsageChart(series);
 const svg = host.innerHTML;
 process.stdout.write(JSON.stringify({
-  hasUsbar: svg.includes('class="usbar"'),
-  hasBareBar: /class="bar"/.test(svg),
-  hasGradient: svg.includes('usGradP') && svg.includes('usGradC'),
-  barCount: (svg.match(/class="usbar"/g) || []).length,
-  hasPeak: svg.includes('峰值'),
-  hasAvg: svg.includes('均值'),
-  emptyState: (function () { ctx.renderUsageChart([]); return host.innerHTML.includes('us-empty'); })(),
+ hasUsbar: svg.includes('class="usbar"'),
+ hasBareBar: /class="bar"/.test(svg),
+ hasGradient: svg.includes('usGradP') && svg.includes('usGradC'),
+ barCount: (svg.match(/class="usbar"/g) || []).length,
+ hasPeak: svg.includes('Пик'),
+ hasAvg: svg.includes('среднее'),
+ emptyState: (function () { ctx.renderUsageChart([]); return host.innerHTML.includes('us-empty'); })(),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "usage-chart-*.cjs")
 	if err != nil {
@@ -455,10 +455,10 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
-// 时间范围控件：预设 → 查询参数的映射。要点：
-//   - 「今天」必须发浏览器本地时区的 00:00（服务端时区未必一致），且不带 to；
-//   - 滚动预设 rolling=true 发 hours（服务端整点对齐），rolling=false 折算成 from；
-//   - 「全部历史」两者都不发；「自定义」发用户挑的 from/to。
+// Контрол диапазона времени: пресеты → Маппинг параметров запроса. Ключевое:
+// - 「«сегодня» должен отправляться в часовом поясе браузера 00:00（часовой пояс сервера может не совпадать), и без to；
+// - Пресет прокрутки rolling=true Отправка hours（выравнивание по ровному часу на сервере),rolling=false Пересчитать в from；
+// - 「«Вся история» — оба не отправляются; "Кастом» — отправляется выбранное пользователем from/to。
 func TestAppJSTimeRangeQuery(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -472,43 +472,43 @@ const end = src.indexOf('function rateLimitMeta');
 if (start < 0 || end < 0 || end < start) throw new Error('trange helpers not found');
 const host = { innerHTML: '' };
 const ctx = {
-  Date, Number, String, Math, Map, Array, Object, isNaN, URLSearchParams,
-  document: { getElementById: () => host },
-  $: () => host,
-  esc: s => String(s == null ? '' : s),
+ Date, Number, String, Math, Map, Array, Object, isNaN, URLSearchParams,
+ document: { getElementById: () => host },
+ $: () => host,
+ esc: s => String(s == null ? '' : s),
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) +
-  '\nthis.trangeState=trangeState; this.trangeQuery=trangeQuery; this.trangeLabel=trangeLabel; this.trangeMidnight=trangeMidnight;', ctx);
+ '\nthis.trangeState=trangeState; this.trangeQuery=trangeQuery; this.trangeLabel=trangeLabel; this.trangeMidnight=trangeMidnight;', ctx);
 const q = (preset, rolling) => {
-  ctx.trangeState('t').preset = preset;
-  return ctx.trangeQuery('t', rolling).toString();
+ ctx.trangeState('t').preset = preset;
+ return ctx.trangeQuery('t', rolling).toString();
 };
 const secOf = d => String(Math.floor(d.getTime() / 1000));
 const approx = (qs, wantSec) => {
-  const m = /(?:^|&)from=(\d+)/.exec(qs);
-  return m && Math.abs(Number(m[1]) - wantSec) < 120;
+ const m = /(?:^|&)from=(\d+)/.exec(qs);
+ return m && Math.abs(Number(m[1]) - wantSec) < 120;
 };
 const now = Date.now();
 const todayQ = q('today', true);
 process.stdout.write(JSON.stringify({
-  todayIsMidnight: todayQ === 'from=' + secOf(ctx.trangeMidnight()),
-  todayNoTo: !/to=/.test(todayQ),
-  rolling24: q('24', true),
-  rolling72: q('72', true),
-  rolling0: q('0', true),
-  log24From: approx(q('24', false), Math.floor((now - 24 * 3600e3) / 1000)),
-  log24HasHours: /hours=/.test(q('24', false)),
-  log7dFrom: approx(q('168', false), Math.floor((now - 168 * 3600e3) / 1000)),
-  custom: (function () {
-    const st = ctx.trangeState('t');
-    st.preset = 'custom';
-    st.from = new Date(2026, 8, 30, 9, 0, 0);
-    st.to = new Date(2026, 8, 30, 18, 30, 0);
-    return ctx.trangeQuery('t', true).toString();
-  })(),
-  labelCustom: ctx.trangeLabel('t'),
-  labelToday: (function () { ctx.trangeState('t').preset = 'today'; return ctx.trangeLabel('t'); })(),
+ todayIsMidnight: todayQ === 'from=' + secOf(ctx.trangeMidnight()),
+ todayNoTo: !/to=/.test(todayQ),
+ rolling24: q('24', true),
+ rolling72: q('72', true),
+ rolling0: q('0', true),
+ log24From: approx(q('24', false), Math.floor((now - 24 * 3600e3) / 1000)),
+ log24HasHours: /hours=/.test(q('24', false)),
+ log7dFrom: approx(q('168', false), Math.floor((now - 168 * 3600e3) / 1000)),
+ custom: (function () {
+ const st = ctx.trangeState('t');
+ st.preset = 'custom';
+ st.from = new Date(2026, 8, 30, 9, 0, 0);
+ st.to = new Date(2026, 8, 30, 18, 30, 0);
+ return ctx.trangeQuery('t', true).toString();
+ })(),
+ labelCustom: ctx.trangeLabel('t'),
+ labelToday: (function () { ctx.trangeState('t').preset = 'today'; return ctx.trangeLabel('t'); })(),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "trange-*.cjs")
 	if err != nil {
@@ -529,13 +529,13 @@ process.stdout.write(JSON.stringify({
 		`"rolling24":"hours=24","rolling72":"hours=72","rolling0":"",` +
 		`"log24From":true,"log24HasHours":false,"log7dFrom":true,` +
 		`"custom":"from=` + local(9, 0) + `&to=` + local(18, 30) + `",` +
-		`"labelCustom":"9-30 09:00 → 9-30 18:30","labelToday":"今天"}`
+		`"labelCustom":"9-30 09:00 → 9-30 18:30","labelToday":"Сегодня"}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("time range=%s\nwant %s", out, want)
 	}
 }
 
-// 同到期时间按面额降序；其余未用完包与零/负余额包分别聚合。
+// При одинаковом сроке — по номиналу по убыванию; остальные неизрасходованные пакеты и ноль/Пакеты с отрицательным балансом агрегируются отдельно.
 func TestAppJSDetailGroups(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -551,27 +551,27 @@ const ctx = { Date, Math, Number, String, Map, Array, Object, isFinite };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.pkDetailGroups = pkDetailGroups; this.pkDetailLimit = pkDetailLimit;', ctx);
 const input = [
-  { id: 'small-late', size: 100, remain: 1, expires_at: 400 },
-  { id: 'zero-early-b', size: 200, remain: 0, expires_at: 200 },
-  { id: 'small-early', size: 100, remain: 2, expires_at: 200 },
-  { id: 'large-unknown', size: 300, remain: 3, end_time: '' },
-  { id: 'zero-early-a', size: 200, remain: -1, expires_at: 200 },
-  { id: 'small-unknown', size: 100, remain: 1, end_time: '' },
-  { id: 'large-early', size: 300, remain: 4, expires_at: 200 },
-  { id: 'zero-late', size: 300, remain: 0, expires_at: 300 },
+ { id: 'small-late', size: 100, remain: 1, expires_at: 400 },
+ { id: 'zero-early-b', size: 200, remain: 0, expires_at: 200 },
+ { id: 'small-early', size: 100, remain: 2, expires_at: 200 },
+ { id: 'large-unknown', size: 300, remain: 3, end_time: '' },
+ { id: 'zero-early-a', size: 200, remain: -1, expires_at: 200 },
+ { id: 'small-unknown', size: 100, remain: 1, end_time: '' },
+ { id: 'large-early', size: 300, remain: 4, expires_at: 200 },
+ { id: 'zero-late', size: 300, remain: 0, expires_at: 300 },
 ];
 const before = input.map(p => p.id).join(',');
 const out = ctx.pkDetailGroups(input, 2);
 process.stdout.write(JSON.stringify({
-  visible: out.visible.map(p => p.id),
-  rest: out.rest.map(p => p.id),
-  used: out.used.map(p => p.id),
-  restSize: out.restSize,
-  restRemain: out.restRemain,
-  usedSize: out.usedSize,
-  defaultLimit: ctx.pkDetailLimit({}),
-  configuredLimit: ctx.pkDetailLimit({ panel: { package_detail_limit: 7 } }),
-  unchanged: input.map(p => p.id).join(',') === before,
+ visible: out.visible.map(p => p.id),
+ rest: out.rest.map(p => p.id),
+ used: out.used.map(p => p.id),
+ restSize: out.restSize,
+ restRemain: out.restRemain,
+ usedSize: out.usedSize,
+ defaultLimit: ctx.pkDetailLimit({}),
+ configuredLimit: ctx.pkDetailLimit({ panel: { package_detail_limit: 7 } }),
+ unchanged: input.map(p => p.id).join(',') === before,
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "detail-groups-*.cjs")
 	if err != nil {
@@ -591,7 +591,7 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
-// 精确剩余天数聚合、账号内按总余额钳制、无到期批次不进入图表。
+// точная агрегация оставшихся дней, clamp по общему балансу внутри аккаунта, партии без срока не попадают в график.
 func TestAppJSExpirySummary(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -608,22 +608,22 @@ vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.summarizeCreditDays = summarizeCreditDays; this.pkAccountColorMap = pkAccountColorMap;', ctx);
 const day = 86400000, now = 100000;
 const out = ctx.summarizeCreditDays([
-  { uid: 'a', remain: 100, packages: [
-    { name: 'soon-a', remain: 30, expires_at: now + day },
-    { name: 'later', remain: 70, expires_at: now + 7 * day },
-  ] },
-  { uid: 'b', remain: 55, packages: [
-    { name: 'soon-b', remain: 20, expires_at: now + day },
-    { name: 'unknown', remain: 5, end_time: '' },
-  ] },
-  { uid: 'err', error: 'offline' },
+ { uid: 'a', remain: 100, packages: [
+ { name: 'soon-a', remain: 30, expires_at: now + day },
+ { name: 'later', remain: 70, expires_at: now + 7 * day },
+ ] },
+ { uid: 'b', remain: 55, packages: [
+ { name: 'soon-b', remain: 20, expires_at: now + day },
+ { name: 'unknown', remain: 5, end_time: '' },
+ ] },
+ { uid: 'err', error: 'offline' },
 ], now);
 process.stdout.write(JSON.stringify({
-  rows: out.rows.map(row => ({ days: row.days, credits: row.credits })),
-  accountCount: out.accountCount,
-  unavailable: out.unavailable,
-  colorA: ctx.pkAccountColorMap([{ uid: 'b' }, { uid: 'a' }]).get('a'),
-  colorB: ctx.pkAccountColorMap([{ uid: 'a' }, { uid: 'b' }]).get('b'),
+ rows: out.rows.map(row => ({ days: row.days, credits: row.credits })),
+ accountCount: out.accountCount,
+ unavailable: out.unavailable,
+ colorA: ctx.pkAccountColorMap([{ uid: 'b' }, { uid: 'a' }]).get('a'),
+ colorB: ctx.pkAccountColorMap([{ uid: 'a' }, { uid: 'b' }]).get('b'),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "expiry-*.cjs")
 	if err != nil {

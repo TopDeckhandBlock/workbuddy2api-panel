@@ -10,7 +10,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// TestReportChatActivitySendsArrayWithUserID 断言出站 body 是数组、含 userId、eventCode 正确。
+// TestReportChatActivitySendsArrayWithUserID Assert исхода body является массивом, содержит userId、eventCode Корректно.
 func TestReportChatActivitySendsArrayWithUserID(t *testing.T) {
 	var got []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +42,7 @@ func TestReportChatActivitySendsArrayWithUserID(t *testing.T) {
 		t.Errorf("eventCode=%v want chat_request_send", ev["eventCode"])
 	}
 	if ev["userId"] != "u-active" {
-		t.Errorf("userId=%v want u-active（缺失则服务端 200 但静默丢弃）", ev["userId"])
+		t.Errorf("userId=%v want u-active(при отсутствии — сервер 200 но тихо отбрасывается)", ev["userId"])
 	}
 	if ev["conversationId"] != "wb2api-123" {
 		t.Errorf("conversationId=%v want wb2api-123", ev["conversationId"])
@@ -50,10 +50,10 @@ func TestReportChatActivitySendsArrayWithUserID(t *testing.T) {
 	if ev["mode"] != "craft" {
 		t.Errorf("mode=%v want craft", ev["mode"])
 	}
-	// 出站 body 必须是数组（以 [ 开头），不是单个对象。
+	// исходящий body Должен быть массивом (с [ начало), а не одиночный объект.
 }
 
-// TestReportChatActivityServerError 业务 code 非 0 返回 *Error。
+// TestReportChatActivityServerError Бизнес code не 0 вернуть *Error。
 func TestReportChatActivityServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)

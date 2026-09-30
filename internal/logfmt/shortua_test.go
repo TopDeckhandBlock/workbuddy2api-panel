@@ -5,11 +5,11 @@ import "testing"
 func TestShortUA(t *testing.T) {
 	cases := []struct {
 		name string
-		ua   string
+		ua string
 		want string
 	}{
 		{"empty", "", ""},
-		{"blank", "   ", ""},
+		{"blank", " ", ""},
 		{"curl", "curl/8.4.0", "curl/8.4.0"},
 		{"python", "python-requests/2.31.0", "python-requests/2.31.0"},
 		{"openai", "OpenAI/Python 1.30.0", "OpenAI/Python"},
@@ -36,13 +36,13 @@ func TestShortUA(t *testing.T) {
 	}
 }
 
-// ShortUA 的返回值必须有界：UA 是客户端可控自由文本，超长值不能原样带进日志列。
+// ShortUA возвращаемое значение должно быть ограничено:UA — свободный текст, контролируемый клиентом, сверхдлинные значения нельзя как есть писать в колонку лога.
 func TestShortUABounded(t *testing.T) {
 	long := "VeryLongClientNameThatKeepsGoingAndGoing/1.2.3"
 	if got := ShortUA(long); len(got) > maxShortUALen {
 		t.Fatalf("len(ShortUA) = %d want <= %d (%q)", len(got), maxShortUALen, got)
 	}
-	// 没有 name/version token 时回落整串，同样受上限约束。
+	// Отсутствует name/version token откат на всю строку, также с ограничением сверху.
 	got := ShortUA("x" + string(make([]byte, 0)) + "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy")
 	if len(got) > maxShortUALen {
 		t.Fatalf("fallback not truncated: %d", len(got))

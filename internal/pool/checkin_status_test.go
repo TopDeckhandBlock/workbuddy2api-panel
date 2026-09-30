@@ -1,5 +1,5 @@
-// checkin_status_test.go 钉住「今日已签到」观测：NoteCheckinDone 标记当日，
-// statusOf 输出 CheckinDone（跨零点自然过期），持久化往返不丢。
+// checkin_status_test.go Фиксация наблюдения "Сегодня уже отмечено»:NoteCheckinDone пометить текущий день,
+// statusOf Вывод CheckinDone（истекает естественно при переходе через полночь), при персистировании не теряется.
 package pool
 
 import (
@@ -17,17 +17,17 @@ func TestNoteCheckinDoneMarksToday(t *testing.T) {
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Add(&auth.Auth{UID: "u2"})
 	if st, _ := p.Status("u1"); st.CheckinDone {
-		t.Fatal("未签到账号不应显示已签")
+		t.Fatal("нечекинутый аккаунт не должен отображаться как чекинутый")
 	}
 	p.NoteCheckinDone("u1")
 	st, ok := p.Status("u1")
 	if !ok || !st.CheckinDone {
-		t.Fatalf("u1 标记后应显示已签: %+v ok=%v", st, ok)
+		t.Fatalf("u1 после отметки должно отображаться «отмечено»: %+v ok=%v", st, ok)
 	}
 	if st, _ := p.Status("u2"); st.CheckinDone {
-		t.Fatal("u2 未标记，不应显示已签")
+		t.Fatal("u2 не помечено, не должно отображаться как отмечено")
 	}
-	// 未知 uid 不 panic、不影响其他账号。
+	// неизвестно uid Не panic、Не влияет на другие аккаунты.
 	p.NoteCheckinDone("no-such-uid")
 }
 
@@ -43,12 +43,12 @@ func TestCheckinDonePersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), `"last_checkin_day"`) {
-		t.Fatalf("state.json 缺少 last_checkin_day:\n%s", raw)
+		t.Fatalf("state.json отсутствует last_checkin_day:\n%s", raw)
 	}
 	p2 := New(fp)
 	p2.Add(&auth.Auth{UID: "u1"})
 	if st, _ := p2.Status("u1"); !st.CheckinDone {
-		t.Fatal("重启后当日已签状态丢失")
+		t.Fatal("После перезапуска теряется статус подписания за текущий день")
 	}
 }
 
@@ -71,6 +71,6 @@ func TestCheckinDoneExpiredYesterday(t *testing.T) {
 	p2 := New(fp)
 	p2.Add(&auth.Auth{UID: "u1"})
 	if st, _ := p2.Status("u1"); st.CheckinDone {
-		t.Fatal("昨日签到记录不应显示为今日已签")
+		t.Fatal("Вчерашний чекин не должен отображаться как сегодняшний")
 	}
 }

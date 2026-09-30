@@ -1,11 +1,11 @@
-// Package redisstore 封装 Upstash（Redis）持久化，并提供内存降级（Noop）。
+// Package redisstore Инкапсуляция Upstash（Redis）Персистентность с фолбэком в память (Noop）。
 //
-// 设计约束：Upstash 走公网 TLS，单次 RTT 可能 50~300ms，因此所有写操作都是
-// fire-and-forget（后台 goroutine + 失败仅 debug 日志），读操作只发生在启动时
-// （加载粘性会话镜像、恢复冷却/熔断快照）。内存为主、Redis 为辅。
+// Ограничения проектирования:Upstash через публичную сеть TLS，Однократно RTT Возможно 50~300ms，поэтому все операции записи —
+// fire-and-forget（бэкенд goroutine + при сбое только debug лог), операции чтения только при запуске
+// （загрузить снапшот sticky-сессии, восстановить cooldown/снапшот circuit breaker). В основном память,Redis вспомогательно.
 //
-// 未配置 url / 连接失败时降级为 Noop：一切功能照常工作（纯内存模式），
-// 上层只打一条启动警告日志。
+// Не настроено url / При ошибке соединения деградация до Noop：Весь функционал работает штатно (чистый in-memory режим),
+// Верхний уровень пишет только одно стартовое warning-сообщение.
 package redisstore
 
 import (
@@ -18,52 +18,52 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// keyTTL 粘性会话镜像 + 状态快照的默认 TTL（redis 侧兜底，防脏数据长期滞留）。
+// keyTTL зеркало sticky-сессии + дефолт снапшота состояния TTL（redis страховка на стороне, защита от долгого зависания грязных данных).
 const keyTTL = 7 * 24 * time.Hour
 
-// writeConcurrencyLimit fire-and-forget 异步写的在途上限（发现 4：写 goroutine
-// 无信号量限制，高写入速率下可瞬时堆积）。超过的排队不丢弃——写语义不变（见 goWrite）。
+// writeConcurrencyLimit fire-and-forget Лимит незавершённых асинхронных записей (обнаружено 4：Запись goroutine
+// Без ограничения семафором, при высокой скорости записи возможен мгновенный всплеск). Превышение ставится в очередь без отбрасывания — семантика записи не меняется (см. goWrite）。
 const writeConcurrencyLimit = 8
 
-// Store 只放本期需要的方法。上下文由实现内部构造（读操作配短超时，写操作 fire-and-forget）。
+// Store оставлены только методы текущего этапа. Контекст строится внутри реализации (чтение с коротким таймаутом, запись fire-and-forget）。
 type Store interface {
-	// SetBind 异步镜像粘性会话绑定（key→uid），带 TTL。
+	// SetBind Асинхронная зеркальная sticky-привязка сессии (key→uid），Лента TTL。
 	SetBind(key, uid string, ttl time.Duration)
-	// DelBind 异步删除粘性会话绑定。
+	// DelBind Асинхронное удаление sticky-привязки сессии.
 	DelBind(key string)
-	// LoadBinds 全量读取粘性会话绑定（key→uid，key 已剥前缀）；仅在启动时调用（同步）。
-	// 供冷启动恢复粘性映射（防重启丢粘性）。
+	// LoadBinds полное чтение привязки sticky-сессии (key→uid，key префикс уже снят); вызывать только при старте (синхронно).
+	// для восстановления sticky-маппинга при холодном старте (защита от потери стикки при рестарте).
 	LoadBinds() map[string]string
-	// SaveState 异步写池状态 JSON 快照（与本地 state.json 并存，仅作恢复备份）。
+	// SaveState Статус асинхронного пула записи JSON Снимок (с локальным state.json сосуществует, только как бэкап для восстановления).
 	SaveState(data []byte)
-	// LoadState 读池状态快照；仅在启动时调用（同步）。
+	// LoadState Чтение снапшота состояния пула; вызывается только при запуске (синхронно).
 	LoadState() ([]byte, bool)
-	// Close 关停 Store：Upstash 等待已提交的异步写全部执行完再关底层连接
-	// （停机语义：最后一笔 Redis 镜像必须写完），之后新提交的写直接丢弃；幂等。
-	// Noop 为空操作。进程退出前在 pool.Close() 之后调用。
+	// Close Отключение Store：Upstash Дождаться выполнения всех отправленных асинхронных записей, затем закрыть нижележащее соединение
+	// （Семантика останова: последняя транзакция Redis образ должен быть полностью записан), последующие новые записи отбрасываются; идемпотентно.
+	// Noop — no-op. Перед выходом процесса в pool.Close() Последующий вызов.
 	Close() error
 }
 
 const (
-	bindPrefix  = "wb2api:bind:"
-	stateKey    = "wb2api:state"
+	bindPrefix = "wb2api:bind:"
+	stateKey = "wb2api:state"
 	readTimeout = 3 * time.Second
 )
 
-// New 根据 url+token 构建 Store。
-//   - url 为空 → Noop（纯内存模式）
-//   - url 已是完整 rediss:// URL 则直接 ParseURL；否则用 token 组装 rediss://default:token@host:6379
-//   - Ping 失败 → Noop + 启动警告（硬性降级要求：不因 Redis 不可用而失败）
+// New Согласно url+token Сборка Store。
+// - url пусто → Noop（режим только в памяти)
+// - url уже полный rediss:// URL то напрямую ParseURL；Иначе использовать token сборка rediss://default:token@host:6379
+// - Ping ошибка → Noop + предупреждение при запуске (жёсткое требование даунгрейда: не из-за Redis недоступен и завершается ошибкой)
 func New(url, token string) Store {
 	if url == "" {
-		log.Printf("[redisstore] upstash 未配置，进入纯内存模式（Noop 降级）")
+		log.Printf("[redisstore] upstash не настроено, переход в чисто in-memory режим (Noop деградация)")
 		return Noop{}
 	}
 
 	full := normalizeURL(url, token)
 	opt, err := redis.ParseURL(full)
 	if err != nil {
-		log.Printf("[redisstore] 警告: redis 连接串解析失败 (%v)，降级 Noop", err)
+		log.Printf("[redisstore] Предупреждение: redis Ошибка парсинга строки подключения (%v)，Деградация Noop", err)
 		return Noop{}
 	}
 	opt.ReadTimeout = readTimeout
@@ -73,23 +73,23 @@ func New(url, token string) Store {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
-		log.Printf("[redisstore] 警告: upstash 连接失败 (%v)，降级 Noop（纯内存模式）", err)
+		log.Printf("[redisstore] Предупреждение: upstash Ошибка подключения (%v)，Деградация Noop（режим только в памяти)", err)
 		_ = client.Close()
 		return Noop{}
 	}
-	log.Printf("[redisstore] upstash 已连接 (addr=%s)", opt.Addr)
+	log.Printf("[redisstore] upstash Подключено (addr=%s)", opt.Addr)
 	return &Upstash{
 		client: client,
-		sem:    make(chan struct{}, writeConcurrencyLimit),
-		done:   make(chan struct{}),
+		sem: make(chan struct{}, writeConcurrencyLimit),
+		done: make(chan struct{}),
 	}
 }
 
-// normalizeURL 把 url+token 归一化为可直接 ParseURL 的完整 rediss:// URL。
-// 若 url 本身已含 scheme（rediss://、redis://、https://...upstash.io 等）：
-//   - rediss:// 或 redis:// 原样返回（已是完整连接串）
-//   - 其余（如 https://xxx.upstash.io）剥掉 "://" 前缀只取 host，再按
-//     "rediss://default:<token>@<host>:6379" 组装
+// normalizeURL взять url+token Нормализовать в напрямую ParseURL полный rediss:// URL。
+// Если url уже содержит scheme（rediss://、redis://、https://...upstash.io и т.д.):
+// - rediss:// Или redis:// вернуть как есть (уже полная строка подключения)
+// - Остальное (напр. https://xxx.upstash.io）Снять "://" Префикс берет только host，затем по
+// "rediss://default:<token>@<host>:6379" сборка
 func normalizeURL(url, token string) string {
 	if len(url) >= 8 && (url[:8] == "rediss:/" || url[:7] == "redis:/") {
 		return url
@@ -101,32 +101,32 @@ func normalizeURL(url, token string) string {
 	return "rediss://default:" + token + "@" + host + ":6379"
 }
 
-// Upstash 真实现：redis.Client 封装。
+// Upstash фактическая реализация:redis.Client Инкапсуляция.
 //
-// 写并发上限（发现 4）：三个异步写共享 sem（cap=writeConcurrencyLimit 的信号量），
-// 在途写超过上限时新写排队不丢弃——语义仍是 fire-and-forget，只是把"无限堆积"
-// 收敛为"有界排队"。Close 前已提交的写（含排队中）保证执行完，Close 后新提交
-// 的写直接丢弃。
+// Лимит конкурентной записи (обнаружено 4）：три асинхронные записи совместно используют sem（cap=writeConcurrencyLimit семафор),
+// При превышении лимита in-flight записей новые ставятся в очередь без отбрасывания — семантика остаётся fire-and-forget，просто"бесконечное накопление"
+// Сходится к"очередь с ограничением"。Close ранее отправленные записи (включая очередь) гарантированно завершатся,Close Новая отправка после
+// запись отбрасывается.
 type Upstash struct {
 	client *redis.Client
-	// sem 写信号量（有界在途写）。cap=1 时退化为串行写，供测试观察调度语义。
+	// sem Семафор записи (ограниченные in-flight записи).cap=1 деградирует до последовательной записи для наблюдения семантики планирования в тестах.
 	sem chan struct{}
-	// done 关停标志（Close 关闭）。sem 与 done 由 New 初始化；测试可直接构造
-	//（client=nil，goWrite/Close 不触网络）。
+	// done флаг отключения (Close закрытие).sem и done От New инициализация; в тестах можно конструировать напрямую
+	//（client=nil，goWrite/Close без обращения к сети).
 	done chan struct{}
-	// closeOnce 保证 Close 幂等（多次调用只关一次 done channel）。
+	// closeOnce Гарантировать Close идемпотентность (многократный вызов закрывает только один раз done channel）。
 	closeOnce sync.Once
-	// submitMu 收窄 goWrite 的提交/关停竞态：goWrite 先登记 wg 再查 done，
-	// Close 先关 done 再等 wg——两侧互斥后，「Close 前提交的写必然执行」
-	// 不再依赖 goroutine 调度时序（83d18ae 原版存在窗口：排队写在 Close
-	// 关 done 之后才跑到检查点会被误丢，close_test.go:138 稳定复现）。
+	// submitMu Сузить goWrite коммит/Гонка при остановке:goWrite Сначала зарегистрировать wg повторно запросить done，
+	// Close Сначала закрыть done подождать еще wg——после взаимного исключения сторон, "Close ранее отправленная запись обязательно выполнится»
+	// Больше не зависит от goroutine Порядок диспетчеризации (83d18ae в оригинале есть окно: запись в очередь в Close
+	// закрыть done позже достигнет чекпоинта — будет ошибочно отброшено,close_test.go:138 стабильно воспроизводится).
 	submitMu sync.Mutex
-	// wg 已提交未完成的写（Close 排空用）。
+	// wg отправленная незавершенная запись (Close для дренажа).
 	wg sync.WaitGroup
 }
 
-// goWrite 以 fire-and-forget 方式执行 fn：写槽（sem）有界并发，Close 前提交的写
-// 必然执行（停机镜像完整性），Close 后提交的写直接丢弃（进程已在退出）。
+// goWrite по fire-and-forget выполнить способом fn：Слот записи (sem）Ограниченный параллелизм,Close отправленная ранее запись
+// Обязательно выполняется (целостность образа при остановке),Close Отправленная позже запись отбрасывается (процесс уже выходит).
 func (u *Upstash) goWrite(fn func()) {
 	u.closeOnceGuard()
 	u.submitMu.Lock()
@@ -134,27 +134,27 @@ func (u *Upstash) goWrite(fn func()) {
 	select {
 	case <-u.done:
 		u.submitMu.Unlock()
-		u.wg.Done() // 关停后提交的写：登记即撤销，直接丢弃
+		u.wg.Done() // запись после останова: регистрация сразу отменяется, напрямую отбрасывается
 		return
 	default:
 	}
 	u.submitMu.Unlock()
 	go func() {
 		defer u.wg.Done()
-		// 只阻塞抢写槽，不检查 done：此处若select done，已阻塞排队的写会在
-		// close(done) 唤醒时全部走丢弃分支（selrand5 实测 100%），「Close 前
-		// 提交的写（含排队中）必然执行」的契约被内部检查破坏——close_test.go:138
-		// 因此间歇失败（约 20%：取决于 write-1/write-2 谁先抢到唯一槽）。丢弃
-		// 语义已由提交点（submitMu 下的 done 检查）唯一承担；此处提交已冻结在
-		// wg 中，Close 的 wg.Wait 必然等到它执行完。
+		// Блокирует только слот конкурентной записи, без проверки done：если здесьselect done，заблокированная в очереди запись выполнится в
+		// close(done) При пробуждении всё уходит в ветку отбрасывания (selrand5 На практике 100%），「Close Перед
+		// контракт "отправленная запись (включая очередь) гарантированно выполнится» нарушен внутренней проверкой —close_test.go:138
+		// поэтому периодические сбои (около 20%：Зависит от write-1/write-2 кто первым захватит единственный слот). Отбросить
+		// семантика уже определяется точкой коммита (submitMu в done проверка) единственный ответственный; коммит здесь заморожен на
+		// wg в,Close wg.Wait Обязательно дождаться завершения.
 		u.sem <- struct{}{}
 		defer func() { <-u.sem }()
 		fn()
 	}()
 }
 
-// closeOnceGuard 防零值 Upstash（未经 New 构造）在 goWrite/Close 上 nil-map 式崩溃：
-// sem/done 为 nil 时补建（cap=1）。仅测试会走到该路径。
+// closeOnceGuard защита от нуля Upstash（без New конструкция) в goWrite/Close Вверх nil-map краш типа:
+// sem/done для nil досоздать при (cap=1）。Этот путь достигается только в тестах.
 func (u *Upstash) closeOnceGuard() {
 	if u.sem == nil || u.done == nil {
 		u.sem = make(chan struct{}, 1)
@@ -162,14 +162,14 @@ func (u *Upstash) closeOnceGuard() {
 	}
 }
 
-// Close 等待已提交的异步写全部执行完毕，再关底层 redis 连接；幂等。
-// 之后新提交的写直接丢弃（goWrite 的 done 检查）。停机路径在 pool.Close() 后调用：
-// pool 的最后一次 Flush→SaveState 已提交，本方法保证它写完才返回。
+// Close Дождаться выполнения всех отправленных асинхронных записей, затем закрыть нижний уровень redis соединение; идемпотентно.
+// последующие новые записи на запись отбрасываются (goWrite done проверка). Путь останова в pool.Close() вызов после:
+// pool последний раз для Flush→SaveState Уже отправлено, метод гарантирует возврат только после завершения записи.
 func (u *Upstash) Close() error {
 	u.closeOnceGuard()
-	// 先关 done 再等 wg：与 goWrite 的 submitMu 互斥后，此时「已提交的写」集合
-	// 已冻结（此后新提交的直接丢弃），wg.Wait 排空即覆盖在途 + 排队两层——
-	// 原 sem 探测法在排队写尚未跑到抢槽点时会误判已排空（83d18ae 竞态）。
+	// Сначала закрыть done подождать еще wg：и goWrite submitMu После мьютекса множество "закоммиченных записей»
+	// заморожено (новые сабмиты далее отбрасываются),wg.Wait дренаж перезатирает in-flight + Два уровня очереди —
+	// Исходный sem Метод зондирования ошибочно считает очередь пустой, когда queued write ещё не дошёл до точки захвата слота (83d18ae гонка).
 	u.submitMu.Lock()
 	u.closeOnce.Do(func() { close(u.done) })
 	u.submitMu.Unlock()
@@ -178,13 +178,13 @@ func (u *Upstash) Close() error {
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		// 兜底超时（单写上限 5s，10s 富余）：卡死的写不应阻塞进程退出。
-		log.Printf("[redisstore] WARN: Close 等待在途写超时，放弃（镜像可能未写完）")
+		// Фолбэк-таймаут (лимит одиночной записи 5s，10s запас): зависшая запись не должна блокировать выход процесса.
+		log.Printf("[redisstore] WARN: Close таймаут ожидания inflight-записи, отмена (зеркало может быть не записано)")
 	}
 	return u.closeClient()
 }
 
-// closeClient 关底层 redis 连接（client 为 nil——测试构造——时跳过）。
+// closeClient Отключить нижний уровень redis Соединение (client для nil——тестовая конструкция — при пропуске).
 func (u *Upstash) closeClient() error {
 	if u.client == nil {
 		return nil
@@ -194,7 +194,7 @@ func (u *Upstash) closeClient() error {
 
 func bindKey(key string) string { return bindPrefix + key }
 
-// SetBind 异步镜像粘性会话绑定。
+// SetBind Привязка липкой сессии асинхронного зеркала.
 func (u *Upstash) SetBind(key, uid string, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = keyTTL
@@ -208,7 +208,7 @@ func (u *Upstash) SetBind(key, uid string, ttl time.Duration) {
 	})
 }
 
-// DelBind 异步删除粘性会话绑定。
+// DelBind Асинхронное удаление sticky-привязки сессии.
 func (u *Upstash) DelBind(key string) {
 	u.goWrite(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -219,7 +219,7 @@ func (u *Upstash) DelBind(key string) {
 	})
 }
 
-// SaveState 异步写池状态 JSON 快照。
+// SaveState Статус асинхронного пула записи JSON снимок.
 func (u *Upstash) SaveState(data []byte) {
 	u.goWrite(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -230,7 +230,7 @@ func (u *Upstash) SaveState(data []byte) {
 	})
 }
 
-// LoadState 同步读池状态快照。
+// LoadState Синхронный снапшот статуса пула чтения.
 func (u *Upstash) LoadState() ([]byte, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
@@ -241,7 +241,7 @@ func (u *Upstash) LoadState() ([]byte, bool) {
 	return v, true
 }
 
-// LoadBinds 全量读取粘性会话绑定（SCAN bind:* 前缀）。
+// LoadBinds полное чтение привязки sticky-сессии (SCAN bind:* префикс).
 func (u *Upstash) LoadBinds() map[string]string {
 	out := map[string]string{}
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
@@ -258,12 +258,12 @@ func (u *Upstash) LoadBinds() map[string]string {
 	return out
 }
 
-// Noop 纯内存降级：所有方法空实现。
+// Noop Деградация в чистую память: все методы — no-op.
 type Noop struct{}
 
 func (Noop) SetBind(string, string, time.Duration) {}
-func (Noop) DelBind(string)                        {}
-func (Noop) LoadBinds() map[string]string          { return nil }
-func (Noop) SaveState([]byte)                      {}
-func (Noop) LoadState() ([]byte, bool)             { return nil, false }
-func (Noop) Close() error                          { return nil }
+func (Noop) DelBind(string) {}
+func (Noop) LoadBinds() map[string]string { return nil }
+func (Noop) SaveState([]byte) {}
+func (Noop) LoadState() ([]byte, bool) { return nil, false }
+func (Noop) Close() error { return nil }

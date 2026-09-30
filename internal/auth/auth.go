@@ -1,5 +1,5 @@
-// Package auth 解析 WorkBuddy auth 文件（嵌套形/扁平形双形态），
-// 提供 refresh 后的原子写回。
+// Package auth Парсинг WorkBuddy auth файл (вложенная форма/плоская двойная форма),
+// Предоставляет refresh атомарная обратная запись после.
 package auth
 
 import (
@@ -18,48 +18,48 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 )
 
-// Auth 是归一化后的账号凭证（来源可以是插件 OAuth 嵌套形或手写扁平形）。
+// Auth Это нормализованные учетные данные аккаунта (источник может быть плагином OAuth вложенная или рукописная плоская форма).
 type Auth struct {
-	// mu 串行化 RefreshToken 写与 SaveAtomic 读，防止并发写回半更新 token。
+	// mu Сериализация RefreshToken Запись и SaveAtomic чтение, предотвращает запись полуобновления при конкуренции token。
 	mu sync.Mutex
 
-	AccessToken  string
+	AccessToken string
 	RefreshToken string
-	ExpiresAt    int64 // Unix 秒
-	Domain       string
-	// realm 账号域（"cn" / "global"），落盘于 auth.realm（嵌套形）或顶层 realm（扁平形）。
-	// 空 = 缺省：Realm() 按 domain 后缀回落，最终恒非空。
+	ExpiresAt int64 // Unix с
+	Domain string
+	// realm Домен аккаунтов ("cn« / "global"），Сохраняется в auth.realm（вложенная форма) или верхний уровень realm（плоская форма).
+	// пустой = По умолчанию:Realm() Нажать domain Фолбэк по суффиксу, в итоге всегда непусто.
 	//
-	// 命名注记：Go 不允许字段与方法同名，持久化字段用未导出 realm，计算访问器用
-	// 导出的 Realm()（跨包调用全部走方法）。Parse/SaveAtomic/login 在包内读写字段。
-	realm        string
-	UID          string
+	// Примечание к именованию:Go Поля и методы не могут одноимённо совпадать, персистентные поля — неэкспортируемые realm，для вычислительного аксессора
+	// экспортированный Realm()（межпакетные вызовы только через методы).Parse/SaveAtomic/login Чтение/запись полей внутри пакета.
+	realm string
+	UID string
 	EnterpriseID string
-	Nickname     string
-	FilePath     string // 来源文件；refresh 后原子写回此处
+	Nickname string
+	FilePath string // исходный файл;refresh после атомарно записать обратно сюда
 
-	// DeviceToken 设备风控 Token（X-Device-Token 头），来源 auth 文件的 device_token 键。
-	// 缺省为空 = 不注入该头（容器内无桌面端 Turing SDK 的常见部署）。
-	// 手写扁平形 auth 文件可直接写 "device_token": "..."；插件 OAuth 嵌套形
-	// 顶层 device_token 也会被解析（与桌面端共用状态文件的部署方式）。
+	// DeviceToken Риск-контроль устройства Token（X-Device-Token заголовок), источник auth файла device_token ключ.
+	// по умолчанию пусто = заголовок не инжектируется (в контейнере нет десктопа Turing SDK типичный деплой).
+	// рукописная плоская форма auth Файл доступен для прямой записи "device_token«: »..."；Плагин OAuth Вложенная форма
+	// Верхний уровень device_token также будет распарсено (деплой с общим файлом состояния для десктопа).
 	DeviceToken string
 }
 
-// Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。
+// Lock Для других пакетов в том же процессе (upstream.RefreshToken）При перезаписи Auth Блокировка на время поля.
 func (a *Auth) Lock() { a.mu.Lock() }
 
-// Unlock 释放 a.Lock 获取的锁。
+// Unlock Освободить a.Lock полученная блокировка.
 func (a *Auth) Unlock() { a.mu.Unlock() }
 
-// AccessTokenValue 加锁读取 AccessToken（出站请求头一律经此取值，勿直读字段）。
+// AccessTokenValue Чтение с блокировкой AccessToken（исходящие заголовки брать только отсюда, не читать поля напрямую).
 //
-// 为什么必须加锁：RefreshToken 在 a.mu 内改写 AccessToken/RefreshToken/Domain/ExpiresAt
-// （client.go「第 2 段（锁内）：校验快照一致后写回」），而所有出站请求头构造
+// Почему нужна блокировка:RefreshToken В a.mu перезапись внутри AccessToken/RefreshToken/Domain/ExpiresAt
+// （client.go「№ 2 участок (внутри блокировки): запись обратно после проверки консистентности снапшота»), а формирование всех исходящих заголовков
 // （ChatHeaders / BillingHeaders / fetchEnterpriseModels / fetchV3Models /
-// global_models）与调度器的 token 检查都在锁外直读这些字段。生产上两侧真会并发：
-// Scheduler.RunKeepaliveNow 定时对**每个**非禁用账号刷新（与是否有在途请求无关），
-// 而 handler 正基于**同一个** *auth.Auth 指针构造请求头（Pool.AuthByUID/List 返回的
-// 就是池内同一个对象）。无同步直读构成数据竞争（go test -race 实证）。
+// global_models）с планировщиком token Проверки читают эти поля вне блокировки. На проде обе стороны реально конкурентны:
+// Scheduler.RunKeepaliveNow По расписанию для**Каждый**Обновление незаблокированных аккаунтов (независимо от наличия активных запросов),
+// И handler основано на**тот же** *auth.Auth указатель формирует заголовок запроса (Pool.AuthByUID/List Возвращённый
+// — это тот же объект в пуле). Несинхронизированное чтение — гонка данных (go test -race подтверждено).
 func (a *Auth) AccessTokenValue() string {
 	if a == nil {
 		return ""
@@ -69,7 +69,7 @@ func (a *Auth) AccessTokenValue() string {
 	return a.AccessToken
 }
 
-// DomainValue 加锁读取 Domain（同 AccessTokenValue：RefreshToken 在锁内改写它）。
+// DomainValue Чтение с блокировкой Domain（Совм. AccessTokenValue：RefreshToken перезаписать его внутри блокировки).
 func (a *Auth) DomainValue() string {
 	if a == nil {
 		return ""
@@ -79,9 +79,9 @@ func (a *Auth) DomainValue() string {
 	return a.Domain
 }
 
-// RefreshTokenValue 加锁读取 RefreshToken（同 AccessTokenValue：RefreshToken 在锁内
-// 改写它）。调度器的「有无凭证」前置守卫（checkin/keepalive/travel 的
-// `a.RefreshToken == ""`）必须经此取值，勿直读字段。
+// RefreshTokenValue Чтение с блокировкой RefreshToken（Совм. AccessTokenValue：RefreshToken внутри блокировки
+// перезаписывает его). Прегард планировщика "наличие учётных данных» (checkin/keepalive/travel 
+// `a.RefreshToken == ""`）Получать значение только через это, не читать поле напрямую.
 func (a *Auth) RefreshTokenValue() string {
 	if a == nil {
 		return ""
@@ -91,34 +91,34 @@ func (a *Auth) RefreshTokenValue() string {
 	return a.RefreshToken
 }
 
-// globalEnabled 全局开关：global realm 是否路由（D5 双保险）。
-// 默认开启（与 config global.enabled 缺省 true 一致）：Realm() 正常按显式 realm/
-// domain 判定 global/cn。显式 SetGlobalEnabled(false)（config "enabled": false）关闭
-// → 逃生门：纯 CN 部署，即便 auth 文件写了 realm=global 或 domain 为 .workbuddy.ai
-// 也恒判 cn——「关了才锁死」的单一闸口集中收敛在 Realm()/IsGlobal() 里。
+// globalEnabled Глобальный переключатель:global realm Роутить ли (D5 двойная защита).
+// Включено по умолчанию (с config global.enabled по умолчанию true совпадает):Realm() В норме по явному realm/
+// domain решение global/cn。Явно SetGlobalEnabled(false)（config "enabled": false）Закрыть
+// → Аварийный выход: только CN деплой, даже если auth файл записан realm=global Или domain для .workbuddy.ai
+// также всегда считается cn——「единственный шлюз "блокировка только после закрытия» сводится к Realm()/IsGlobal() в.
 var globalEnabled atomic.Bool
 
 func init() { globalEnabled.Store(true) }
 
-// SetGlobalEnabled 注入 global realm 路由开关（false = 锁死纯 CN，逃生门）。
+// SetGlobalEnabled инжект global realm Переключатель маршрутизации (false = Залочить чисто CN，аварийный выход).
 func SetGlobalEnabled(enabled bool) { globalEnabled.Store(enabled) }
 
-// GlobalEnabled 报告 global realm 路由开关当前状态（测试/运维观测）。
+// GlobalEnabled отчет global realm Текущее состояние переключателя маршрутизации (тест/наблюдаемость эксплуатации).
 func GlobalEnabled() bool { return globalEnabled.Load() }
 
-// Realm 返回账号的归一化域：显式 Realm=="global" 或 domain 后缀 .workbuddy.ai → "global"，
-// 否则 "cn"。显式 global 优先于 domain 回落（D1）。
-// 全局开关 SetGlobalEnabled(false) 时恒 "cn"（逃生门：纯 CN 锁定，不影响默认行为）。
-// 空 realm + 空 domain → "cn"（老 CN 凭证零回归）。
+// Realm Возвращает нормализованный домен аккаунта: явно Realm=="global« Или domain суффикс .workbuddy.ai → "global"，
+// Иначе "cn"。Явно global имеет приоритет над domain Откат (D1）。
+// глобальный свитч SetGlobalEnabled(false) при всегда "cn"（Аварийный выход: только CN заблокировано, не влияет на поведение по умолчанию).
+// пустой realm + пустой domain → "cn"（Старый CN Сброс учетных данных к нулю).
 func (a *Auth) Realm() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.realmLocked()
 }
 
-// realmLocked Realm 的无锁内部实现：仅限**已持 a.mu** 的调用方使用（sync.Mutex 不可重入，
-// 锁内再调 Realm() 会自锁）。realm 由 BackfillRealm 改写、Domain 由 RefreshToken 在锁内
-// 改写，故读取必须与写方同锁（理由见 AccessTokenValue 注释）。
+// realmLocked Realm внутренняя реализация без блокировок: только**уже удерживается a.mu** используется вызывающей стороной (sync.Mutex Нереентерабельно,
+// повторный вызов под блокировкой Realm() будет самоблокировка).realm От BackfillRealm Перезапись,Domain От RefreshToken внутри блокировки
+// Перезапись, поэтому чтение должно быть под той же блокировкой, что и запись (см. AccessTokenValue комментарий).
 func (a *Auth) realmLocked() string {
 	if !globalEnabled.Load() {
 		return "cn"
@@ -129,9 +129,9 @@ func (a *Auth) realmLocked() string {
 	return "cn"
 }
 
-// ResolveRealm 归一化 realm（cn/global）：显式非空优先，否则按原始 domain 推断
-// （isGlobalDomain）。不受逃生门影响（逃生门是路由锁，不应影响标识判定）；
-// domain 也为空 → "cn"（老 CN 凭证零回归）。
+// ResolveRealm Нормализация realm（cn/global）：приоритет явно непустому, иначе по исходному domain инференс
+// （isGlobalDomain）。Не зависит от escape hatch (escape hatch — блокировка маршрута, не должен влиять на определение идентификатора);
+// domain также пусто → "cn"（Старый CN Сброс учетных данных к нулю).
 func ResolveRealm(explicit, domain string) string {
 	if r := strings.TrimSpace(explicit); r != "" {
 		return r
@@ -142,12 +142,12 @@ func ResolveRealm(explicit, domain string) string {
 	return "cn"
 }
 
-// BackfillRealm 为缺省 realm 标识的账号持久化补标识：a.realm 为空时按「原始 domain 推断」
-// 写回（cn/global），返回 (是否有变更, 归一化后的 realm)。已有标识不动（幂等）。
+// BackfillRealm По умолчанию realm персистентно проставить метку для помеченного аккаунта:a.realm При пустоте — по "исходному domain вывод»
+// запись обратно (cn/global），вернуть (Есть ли изменения, После нормализации realm)。Существующая метка не меняется (идемпотентно).
 //
-// 注意用 isGlobalDomain(a.Domain) 直接推断，而非 Realm()——Realm() 在逃生门
-// （SetGlobalEnabled(false)）下恒降级 cn，把 global 账号写死成 cn 会永久污染凭证
-// （逃生门是纯 CN 部署的临时锁，不应改写落盘数据）。domain 也为空时写 "cn"（老 CN 凭证）。
+// осторожно используйте isGlobalDomain(a.Domain) Прямой вывод, а не Realm()——Realm() в аварийном выходе
+// （SetGlobalEnabled(false)）постоянная деградация при cn，взять global Аккаунт захардкожен как cn навсегда загрязнит учетные данные
+// （Аварийный выход — чисто CN временная блокировка деплоя, не должна перезаписывать данные на диске).domain также пусто — писать "cn"（Старый CN Учётные данные).
 func (a *Auth) BackfillRealm() (bool, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -159,16 +159,16 @@ func (a *Auth) BackfillRealm() (bool, string) {
 	return true, r
 }
 
-// RealmStored 直读持久化的 realm 标识（可能为空 = 未 backfill 的旧文件，Realm() 会 fallback）。
+// RealmStored прямое чтение персистентного realm Идентификатор (может быть пустым = Не backfill старый файл,Realm() Будет fallback）。
 func (a *Auth) RealmStored() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.realm
 }
 
-// BackfillRealmFor 显式写入 realm 标识（包外登录路径使用：panel login 已知用户选了
-// global，直接落盘 realm=global，不依赖 domain 后缀推断）。realm 需为 cn/global，
-// 非法值报错（防写脏）。返回是否发生变更。
+// BackfillRealmFor Явная запись realm идентификатор (путь логина вне пакета:panel login Известно, что пользователь выбрал
+// global，Прямая запись на диск realm=global，не зависит от domain вывод по суффиксу).realm должен быть cn/global，
+// ошибка невалидного значения (защита от грязной записи). Вернуть, было ли изменение.
 func BackfillRealmFor(a *Auth, realm string) (bool, error) {
 	if a == nil {
 		return false, fmt.Errorf("nil auth")
@@ -187,17 +187,17 @@ func BackfillRealmFor(a *Auth, realm string) (bool, error) {
 	return true, nil
 }
 
-// IsGlobal 报告账号是否属于 global realm（= Realm() == "global"）。
+// IsGlobal Сообщить, принадлежит ли аккаунт к global realm（= Realm() == "global"）。
 func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 
-// isGlobalDomain 判定 domain 是否指向 www.workbuddy.ai 家族。
-// 同时接受裸域 workbuddy.ai 与任意子域（HasSuffix("www.workbuddy.ai") 或裸域本身）。
+// isGlobalDomain решение domain указывает ли на www.workbuddy.ai Семейство.
+// одновременно принимает голый домен workbuddy.ai и любой поддомен (HasSuffix("www.workbuddy.ai") или сам bare-домен).
 func isGlobalDomain(d string) bool {
 	d = strings.ToLower(strings.TrimSpace(d))
 	return d == "workbuddy.ai" || strings.HasSuffix(d, ".workbuddy.ai")
 }
 
-// NeedsRefresh 报告 token 是否将在 within 内过期（或已过期/无 expiry）。
+// NeedsRefresh отчет token Будет ли в within истекает внутри (или уже истек/отсутствует expiry）。
 func (a *Auth) NeedsRefresh(within time.Duration) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -207,10 +207,10 @@ func (a *Auth) NeedsRefresh(within time.Duration) bool {
 	return time.Now().Add(within).Unix() >= a.ExpiresAt
 }
 
-// Parse 兼容两种磁盘形态：
+// Parse Совместимость с двумя типами дисков:
 //
-//	嵌套形 {"auth":{...},"account":{...}}  （插件 OAuth 输出）
-//	扁平形 {"accessToken":...,"uid":...}   （手写/旧版）
+//	Вложенная форма {"auth":{...},«account":{...}} （Плагин OAuth вывод)
+//	Плоская форма {"accessToken":...,«uid":...} （Ручной ввод/старая версия)
 func Parse(raw []byte) (*Auth, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("empty auth storage")
@@ -223,59 +223,59 @@ func Parse(raw []byte) (*Auth, error) {
 	if _, nested := probe["auth"]; nested {
 		var n struct {
 			Auth struct {
-				AccessToken  string `json:"accessToken"`
+				AccessToken string `json:"accessToken"`
 				RefreshToken string `json:"refreshToken"`
-				ExpiresAt    int64  `json:"expiresAt"`
-				Domain       string `json:"domain"`
-				Realm        string `json:"realm"`
+				ExpiresAt int64 `json:"expiresAt"`
+				Domain string `json:"domain"`
+				Realm string `json:"realm"`
 			} `json:"auth"`
 			Account struct {
-				UID          string `json:"uid"`
+				UID string `json:"uid"`
 				EnterpriseID string `json:"enterpriseId"`
-				Nickname     string `json:"nickname"`
+				Nickname string `json:"nickname"`
 			} `json:"account"`
-			// DeviceToken 顶层 device_token（嵌套形与扁平形共用；手写时无需嵌进 auth 对象）。
+			// DeviceToken Верхний уровень device_token（Совместимость вложенной и плоской форм; при ручной записи вложенность не требуется auth объект).
 			DeviceToken string `json:"device_token"`
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
 		}
 		a = Auth{
-			AccessToken:  n.Auth.AccessToken,
+			AccessToken: n.Auth.AccessToken,
 			RefreshToken: n.Auth.RefreshToken,
-			ExpiresAt:    n.Auth.ExpiresAt,
-			Domain:       n.Auth.Domain,
-			realm:        n.Auth.Realm,
-			UID:          n.Account.UID,
+			ExpiresAt: n.Auth.ExpiresAt,
+			Domain: n.Auth.Domain,
+			realm: n.Auth.Realm,
+			UID: n.Account.UID,
 			EnterpriseID: n.Account.EnterpriseID,
-			Nickname:     n.Account.Nickname,
-			DeviceToken:  n.DeviceToken,
+			Nickname: n.Account.Nickname,
+			DeviceToken: n.DeviceToken,
 		}
 	} else {
 		var f struct {
-			AccessToken  string `json:"accessToken"`
+			AccessToken string `json:"accessToken"`
 			RefreshToken string `json:"refreshToken"`
-			ExpiresAt    int64  `json:"expiresAt"`
-			Domain       string `json:"domain"`
-			Realm        string `json:"realm"`
-			UID          string `json:"uid"`
+			ExpiresAt int64 `json:"expiresAt"`
+			Domain string `json:"domain"`
+			Realm string `json:"realm"`
+			UID string `json:"uid"`
 			EnterpriseID string `json:"enterpriseId"`
-			Nickname     string `json:"nickname"`
-			DeviceToken  string `json:"device_token"`
+			Nickname string `json:"nickname"`
+			DeviceToken string `json:"device_token"`
 		}
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
 		}
 		a = Auth{
-			AccessToken:  f.AccessToken,
+			AccessToken: f.AccessToken,
 			RefreshToken: f.RefreshToken,
-			ExpiresAt:    f.ExpiresAt,
-			Domain:       f.Domain,
-			realm:        f.Realm,
-			UID:          f.UID,
+			ExpiresAt: f.ExpiresAt,
+			Domain: f.Domain,
+			realm: f.Realm,
+			UID: f.UID,
 			EnterpriseID: f.EnterpriseID,
-			Nickname:     f.Nickname,
-			DeviceToken:  f.DeviceToken,
+			Nickname: f.Nickname,
+			DeviceToken: f.DeviceToken,
 		}
 	}
 	if strings.TrimSpace(a.AccessToken) == "" {
@@ -284,9 +284,9 @@ func Parse(raw []byte) (*Auth, error) {
 	return &a, nil
 }
 
-// SaveAtomic 以嵌套形原子写回 FilePath（tmp + rename），保持嵌套形（插件可读）格式。
-// 全程持 a.mu：防止与 RefreshToken 修改 token 字段并发，杜绝写回半更新。
-// 防御：accessToken 为空时拒绝写回，避免误用空凭证覆盖有效文件。
+// SaveAtomic Атомарная запись в виде вложенной структуры FilePath（tmp + rename），Сохранять вложенную (читаемую плагином) форму.
+// удерживать на всём протяжении a.mu：Предотвратить конфликт с RefreshToken изменить token Конкурентность по полям, исключить частичную запись.
+// Защита:accessToken При пустом значении запись отклоняется, чтобы пустые credentials не перезаписали валидный файл.
 func (a *Auth) SaveAtomic() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -298,54 +298,54 @@ func (a *Auth) SaveAtomic() error {
 	}
 	doc := map[string]any{
 		"auth": map[string]any{
-			"accessToken":  a.AccessToken,
+			"accessToken": a.AccessToken,
 			"refreshToken": a.RefreshToken,
-			"expiresAt":    a.ExpiresAt,
-			"domain":       a.Domain,
-			"realm":        a.realm,
+			"expiresAt": a.ExpiresAt,
+			"domain": a.Domain,
+			"realm": a.realm,
 		},
 		"account": map[string]any{
-			"uid":          a.UID,
+			"uid": a.UID,
 			"enterpriseId": a.EnterpriseID,
-			"nickname":     a.Nickname,
+			"nickname": a.Nickname,
 		},
 	}
-	// DeviceToken 非空才写回顶层 device_token：避免在无该字段的旧文件里引入空键
-	// （保持与插件 OAuth 输出形状一致，插件读取忽略未知键）。
+	// DeviceToken Запись на верхний уровень только если не пусто device_token：Избежать появления пустого ключа в старых файлах без этого поля
+	// （сохранение совместимости с плагином OAuth форма вывода совпадает, плагин игнорирует неизвестные ключи).
 	if a.DeviceToken != "" {
 		doc["device_token"] = a.DeviceToken
 	}
-	raw, err := json.MarshalIndent(doc, "", "  ")
+	raw, err := json.MarshalIndent(doc, "", " ")
 	if err != nil {
 		return err
 	}
 	tmp := a.FilePath + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		// Docker bind-mount 权限问题的典型现场：容器内 app 用户（uid 10001）
-		// 对宿主机挂载目录无写权限。给出可操作指引而不是裸 syscall 错误。
-		msg := fmt.Sprintf("写入 %s 失败: %v", tmp, err)
+		// Docker bind-mount типичный кейс проблем с правами: внутри контейнера app Пользователь (uid 10001）
+		// Нет прав записи в смонтированный каталог хоста. Выдать actionable инструкцию, а не голую syscall ошибка.
+		msg := fmt.Sprintf("запись %s ошибка: %v", tmp, err)
 		if errors.Is(err, fs.ErrPermission) {
-			msg += "\n（Docker 部署：容器内用户对宿主机挂载目录无写权限。解法任选：" +
-				"1) 以本机 uid 运行容器：PUID=$(id -u) PGID=$(id -g) docker compose up -d；" +
+			msg += "\n（Docker Деплой: у пользователя в контейнере нет прав записи в смонтированную директорию хоста. Варианты решения:" +
+				"1) На локальной машине uid запустить контейнер:PUID=$(id -u) PGID=$(id -g) docker compose up -d；" +
 				"2) sudo chown -R 10001:10001 ./auths ./data ./config.json；" +
-				"3) compose 设 user: \"0:0\" 以 root 运行）"
+				"3) compose Настройка user: «0:0» по root выполнение)"
 		}
 		return errors.New(msg)
 	}
 	return os.Rename(tmp, a.FilePath)
 }
 
-// LoadDir 扫描并解析 dir 下 workbuddy*.json；解析失败的文件静默跳过（启动日志由调用方统计）。
-// 顺带做 realm 标识存量迁移：对空 realm 的 auth 自动 backfill（原始 domain 推断）并 SaveAtomic
-// 落盘，一次性把旧文件补上 realm 键。单个文件写失败不阻断启动（log WARN 继续），
-// 避免历史 auth 目录个别文件不可写时整个服务起不来。
+// LoadDir сканировать и парсить dir вниз workbuddy*.json；Файлы с ошибкой парсинга тихо пропускаются (лог запуска ведет вызывающая сторона).
+// Попутно выполнить realm маркер миграции legacy-данных: для пустого realm auth Авто backfill（Исходный domain вывод) и SaveAtomic
+// Сброс на диск, одноразово дополнить старый файл realm ключ. Ошибка записи одного файла не блокирует запуск (log WARN Продолжить),
+// Избежать истории auth если отдельные файлы в каталоге недоступны для записи, весь сервис не запустится.
 func LoadDir(dir string) ([]*Auth, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "workbuddy*.json"))
 	if err != nil {
 		return nil, err
 	}
-	// seenUID 重复 UID 检测：同 UID 出现在多个文件时（双 realm 同名 UID 概率近零）
-	// 打 WARN 告警含两文件路径，由「后载入者胜出」保持现状行为（不改变加载结果）。
+	// seenUID повтор UID Проверка: то же UID При появлении в нескольких файлах (двойной realm Одноименный UID вероятность близка к нулю)
+	// ввод WARN Алерт содержит два пути к файлам, по правилу "побеждает загруженный последним» сохраняется текущее поведение (результат загрузки не меняется).
 	seenUID := make(map[string]string, len(files))
 	var out []*Auth
 	for _, f := range files {
@@ -359,7 +359,7 @@ func LoadDir(dir string) ([]*Auth, error) {
 		}
 		a.FilePath = f
 		if prev, ok := seenUID[a.UID]; ok {
-			log.Printf("WARN: uid %s duplicated across %s and %s — 后者覆盖（不同 realm 同名 UID？）",
+			log.Printf("WARN: uid %s duplicated across %s and %s — Последнее перекрывает (разные realm Одноименный UID？）",
 				logfmt.Label(a.UID, a.Nickname), prev, f)
 		}
 		seenUID[a.UID] = f
@@ -368,7 +368,7 @@ func LoadDir(dir string) ([]*Auth, error) {
 				if err := a.SaveAtomic(); err != nil {
 					log.Printf("WARN: auth %s realm backfill save: %v", logfmt.Label(a.UID, a.Nickname), err)
 				} else if r == "global" {
-					log.Printf("auth %s 存量迁移: 补 realm=global（domain=%s）", logfmt.Label(a.UID, a.Nickname), a.Domain)
+					log.Printf("auth %s миграция существующих данных: Дополнить realm=global（domain=%s）", logfmt.Label(a.UID, a.Nickname), a.Domain)
 				}
 			}
 		}

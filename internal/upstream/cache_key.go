@@ -1,12 +1,12 @@
-// cache_key.go 注入上游 prompt_cache_key 字段（P0 费用优化）。
+// cache_key.go Инжект в upstream prompt_cache_key Поле (P0 оптимизация затрат).
 //
-// 逆向实测（buddy-adapter.ts:706-714）：上游服务端支持 prompt_cache_key，
-// 同一段 8k token 前缀：
-//   - 不带 → prompt_cache_hit_tokens=0, credit≈0.34
-//   - 带   → prompt_cache_hit_tokens=7808, credit≈0.02（费用降 ~17×）
+// реверс-тест (buddy-adapter.ts:706-714）：Поддержка апстрим-сервера prompt_cache_key，
+// тот же сегмент 8k token префикс:
+// - без → prompt_cache_hit_tokens=0, credit≈0.34
+// - Лента → prompt_cache_hit_tokens=7808, credit≈0.02（Снижение стоимости ~17×）
 //
-// 网关在此为每个出站 chat 请求注入一个稳定、按账号隔离的 cache key，
-// 让同一客户端对同一账号的连续请求复用上游前缀缓存。
+// Шлюз здесь для каждого исходящего chat В запрос инжектируется стабильный, изолированный по аккаунту cache key，
+// Позволяет последовательным запросам одного клиента к одному аккаунту переиспользовать префиксный кэш апстрима.
 package upstream
 
 import (
@@ -16,22 +16,22 @@ import (
 	"strings"
 )
 
-// InjectPromptCacheKey 在已改写的出站 body 上注入 prompt_cache_key 字段。
+// InjectPromptCacheKey в уже переписанном исходящем body инжект на prompt_cache_key Поле.
 //
-// 优先级：
-//  1. body 已带 prompt_cache_key → 原值保留（客户端自知复用哪个键）
-//  2. body 已带 conversation_id / conversationId → 用它做会话哈希源
-//  3. 都没有 → 用入站 conversationID 参数（来自 X-Conversation-ID 头解析）
+// Приоритет:
+// 1. body Уже содержит prompt_cache_key → исходное значение сохраняется (клиент сам знает, какой ключ переиспользовать)
+// 2. body Уже содержит conversation_id / conversationId → использовать как источник хеша сессии
+// 3. ничего нет → использовать inbound conversationID параметр (из X-Conversation-ID парсинг заголовка)
 //
-// 安全约束——按账号隔离：
-//   - 生成键格式 `wb2a-<uid8>-<convHex>`
-//   - uid8 是账号 UID 前 8 字符，跨账号绝不相同 → 跨账号缓存键绝不碰撞
-//   - 跨账号复用同一 cache key 会让上游命中错账号的前缀缓存、泄露对方对话，故 uid 是硬隔离因子
+// Ограничение безопасности — изоляция по аккаунту:
+// - Формат генерации ключа `wb2a-<uid8>-<convHex>`
+// - uid8 это аккаунт UID Перед 8 символов, между аккаунтами никогда не совпадает → ключи кэша между аккаунтами никогда не коллизируют
+// - Кросс-аккаунтное переиспользование одного cache key приведёт к попаданию апстрима в префикс-кэш чужого аккаунта и утечке чужого диалога, поэтому uid является фактором жёсткой изоляции
 //
-// 入参 uid 为账号 UID（空则用 "-"，但仍会注入键；调用方应保证传真实 UID）。
-// 入参 conversationID 为网关解析出的会话标识（body 里没有 conversation_id 时用它做哈希源）。
-// 两源都空时 convHex 为定值（每次新会话不复用前缀，但仍保留账号隔离段）。
-// body 不可解析时原样返回（与 prepareBody 语义一致：坏 body 不二次错误化）。
+// входной параметр uid для аккаунта UID（если пусто, использовать "-"，но ключ все равно будет инжектирован; вызывающая сторона должна передавать реальный UID）。
+// входной параметр conversationID идентификатор сессии, распарсенный шлюзом (body внутри нет conversation_id использовать его как источник хеша).
+// Когда оба источника пусты convHex — фиксированное значение (префикс не переиспользуется в каждой новой сессии, но сегмент изоляции аккаунта сохраняется).
+// body При невозможности парсинга вернуть как есть (с prepareBody семантикасовпадение: плохой body без повторной классификации как ошибки).
 func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 	if len(body) == 0 {
 		return body
@@ -40,11 +40,11 @@ func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return body
 	}
-	// 优先级 1：客户端已显式带 key → 绝不覆盖。
+	// Приоритет 1：клиент уже явно передал key → Никогда не перезаписывать.
 	if existing, ok := obj["prompt_cache_key"].(string); ok && existing != "" {
 		return body
 	}
-	// 优先级 2：body 里的 conversation_id / conversationId 做会话哈希源。
+	// Приоритет 2：body внутри conversation_id / conversationId использовать как источник хеша сессии.
 	conv := conversationID
 	if v := strField(obj, "conversation_id"); v != "" {
 		conv = v
@@ -60,11 +60,11 @@ func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 	return out
 }
 
-// buildCacheKey 生成 `wb2a-<uid8>-<convHex>` 格式的稳定 cache key。
+// buildCacheKey Генерация `wb2a-<uid8>-<convHex>` стабильность формата cache key。
 //
-// uid8 提供账号隔离段；convHex = sha256(uid + conversationID)[:16] 的 hex 提供会话段
-// （同账号同会话稳定、不同会话不同）。会话源为空时 convHex 仍由 uid 单独哈希，
-// 保证跨账号绝不碰撞但同一空会话不复用（空会话 = 新会话语义）。
+// uid8 Предоставляет изолированный сегмент аккаунта;convHex = sha256(uid + conversationID)[:16] hex Предоставить сегмент сессии
+// （один аккаунт — одна сессия стабильно, разные сессии — по-разному). При пустом источнике сессии convHex по-прежнему uid отдельное хеширование,
+// гарантировать отсутствие коллизий между аккаунтами, но не переиспользовать одну пустую сессию (пустая сессия = семантика новой сессии).
 func buildCacheKey(uid, conversation string) string {
 	uid8 := uid
 	if len(uid8) > 8 {
@@ -78,7 +78,7 @@ func buildCacheKey(uid, conversation string) string {
 	return "wb2a-" + uid8 + "-" + convHex
 }
 
-// strField 从 map 取 string 字段，非 string 或空串返回 ""。
+// strField Из map получить string поле, не string или вернуть пустую строку ""。
 func strField(obj map[string]any, key string) string {
 	v, ok := obj[key].(string)
 	if !ok {

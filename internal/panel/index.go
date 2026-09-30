@@ -1,11 +1,11 @@
-// index.go 面板静态资源与安全响应头。
+// index.go статические ресурсы панели и security-заголовки.
 //
-// 资源经 go:embed 打进二进制（随服务部署，无外部构建步骤）：
-//   - index.html  页面骨架
-//   - app.js      全部前端逻辑（独立文件而非内联，为了启用无需 unsafe-inline 的严格 CSP）
+// Ресурс через go:embed Вшивается в бинарь (деплоится вместе с сервисом, без внешних шагов сборки):
+// - index.html Каркас страницы
+// - app.js вся логика фронтенда (отдельный файл, не inline, чтобы включить без unsafe-inline строгий CSP）
 //
-// 安全头对"面板页面与全部 /panel/api/* 响应"统一生效：CSP 限制脚本只能来自本服务，
-// 禁止被 iframe 嵌套（防点击劫持），禁 MIME 嗅探，并声明不泄露 Referer 出去。
+// пара security-заголовков"Страница панели и все /panel/api/* Ответ"единое применение:CSP скрипты разрешены только с этого сервиса,
+// Запрещено iframe вложенность (защита от clickjacking), запрет MIME сниффинг, с декларацией отсутствия утечки Referer исходящий.
 package panel
 
 import (
@@ -19,32 +19,32 @@ var indexHTML []byte
 //go:embed app.js
 var appJS []byte
 
-// csp 内容安全策略（严格版，无需 unsafe-inline）：
-//   - default-src 'none'        默认全禁，逐个开口
-//   - script-src 'self'         只跑同源脚本（app.js）；页面无内联事件处理器/内联脚本
-//   - style-src 'self' 'unsafe-inline'
-//     style 的内联是设计取舍：页面有少量 style="..." 属性（进度条宽度、表格列宽），
-//     允许内联样式不会导致脚本执行；仍禁止外部样式域与 @import 外链。
-//   - connect-src 'self'        前端 fetch 只能打本服务
-//   - img-src 'self' data:      图标/内联图
-//   - form-action 'none'        页面无表单提交目标（配置页是 JS 提交）
-//   - frame-ancestors 'none'    禁止被任何站点 iframe 嵌套（点击劫持）
-//   - base-uri 'none'          禁止注入 <base> 改写相对路径
+// csp политика безопасности контента (строгая версия, без unsafe-inline）：
+// - default-src 'none' по умолчанию всё запрещено, открытие поштучно
+// - script-src 'self' запускать только same-origin скрипты (app.js）；на странице нет inline-обработчиков событий/Инлайн-скрипт
+// - style-src 'self' 'unsafe-inline'
+// style инлайн — проектный компромисс: на странице немного style="..." свойства (ширина прогресс-бара, ширина столбцов таблицы),
+// разрешение inline-стилей не ведёт к выполнению скриптов; внешние домены стилей всё равно запрещены и @import Внешняя ссылка.
+// - connect-src 'self' Фронтенд fetch Только для этого сервиса
+// - img-src 'self' data: Иконка/Инлайн-изображение
+// - form-action 'none' у страницы нет цели отправки формы (страница конфигурации — JS коммит)
+// - frame-ancestors 'none' Запрещено любым сайтом iframe Вложенность (кликджекинг)
+// - base-uri 'none' инжект запрещен <base> Перезапись относительного пути
 const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
 	"connect-src 'self'; img-src 'self' data:; form-action 'none'; " +
 	"frame-ancestors 'none'; base-uri 'none'"
 
-// setSecurityHeaders 写入面板统一安全响应头（页面与 API 都要，API 也含 JSON 数据）。
+// setSecurityHeaders записать единые security-заголовки панели (страница и API нужны оба,API также содержит JSON данные).
 func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", csp)
-	w.Header().Set("X-Content-Type-Options", "nosniff") // 禁 MIME 嗅探
-	w.Header().Set("X-Frame-Options", "DENY")           // 老浏览器兜底（CSP frame-ancestors 的等价项）
-	w.Header().Set("Referrer-Policy", "no-referrer")    // 不外泄面板地址给外部站点
+	w.Header().Set("X-Content-Type-Options", "nosniff") // Запрет MIME Сниффинг
+	w.Header().Set("X-Frame-Options", "DENY") // Фолбэк для старых браузеров (CSP frame-ancestors эквивалент)
+	w.Header().Set("Referrer-Policy", "no-referrer") // Не раскрывать адрес панели внешним сайтам
 	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
-// index 输出面板页面（静态无秘密；数据接口 /panel/api/* 才走鉴权）。
+// index Страница панели вывода (статика без секретов; интерфейс данных /panel/api/* только тогда — аутентификация).
 func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -52,7 +52,7 @@ func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(indexHTML)
 }
 
-// appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。
+// appScript Логика вывода фронтенда (same-origin скрипт, для CSP script-src 'self' загрузка).
 func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")

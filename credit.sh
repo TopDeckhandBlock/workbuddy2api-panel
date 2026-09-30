@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# credit.sh — WorkBuddy 积分日报（默认美化输出）
+# credit.sh — WorkBuddy ежедневный отчёт по баллам (по умолчанию — форматированный вывод)
 #
-# 用法:
-#   ./credit.sh            # 人类可读日报
-#   ./credit.sh -json      # 原始 JSON
+# Использование:
+# ./credit.sh # человекочитаемый daily-отчёт
+# ./credit.sh -json # Исходный JSON
 #
-# 二进制升级: go build -o credit ./cmd/credit
+# Бинарное обновление: go build -o credit ./cmd/credit
 set -euo pipefail
 cd "$(dirname "$0")"
 if [[ "${1:-}" == "-json" ]]; then
-    exec ./credit
+ exec ./credit
 fi
 exec ./credit -pretty

@@ -1,5 +1,5 @@
-// credit_floor_config_test.go pool.credit_floor 配置测试：
-// 默认 0（关闭，零回归）/ 文件覆盖 / 负值钳 0 / 大值合法。
+// credit_floor_config_test.go pool.credit_floor Тест конфигурации:
+// По умолчанию 0（закрыто, без регрессии)/ перезапись файла / кламп отрицательных значений 0 / большое значение допустимо.
 package main
 
 import (
@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestCreditFloorDefault 键缺席 → 默认 0（保底关闭，行为与引入前一致）。
+// TestCreditFloorDefault Ключ отсутствует → По умолчанию 0（fallback отключен, поведение как до внедрения).
 func TestCreditFloorDefault(t *testing.T) {
 	c := Default()
 	if err := c.normalize(); err != nil {
@@ -19,7 +19,7 @@ func TestCreditFloorDefault(t *testing.T) {
 	}
 }
 
-// TestCreditFloorParsedFromFile 显式配置覆盖默认。
+// TestCreditFloorParsedFromFile явная конфигурация переопределяет дефолт.
 func TestCreditFloorParsedFromFile(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
@@ -33,7 +33,7 @@ func TestCreditFloorParsedFromFile(t *testing.T) {
 	}
 }
 
-// TestCreditFloorNegativeClamped 负值钳 0（非法即关闭，不报错：老配置误写不炸启动）。
+// TestCreditFloorNegativeClamped кламп отрицательных значений 0（невалидное — выкл., без ошибки: опечатка старой конфигурации не ломает запуск).
 func TestCreditFloorNegativeClamped(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")

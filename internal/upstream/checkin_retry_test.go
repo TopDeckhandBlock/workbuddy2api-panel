@@ -1,6 +1,6 @@
-// checkin_retry_test.go 钉住签到/余额维护类计费调用的瞬时错误有界重试：
-// 上游 5xx（实测偶发 code 10000 / http 500）与网络抖动重试，业务错误（已签到/
-// 参数错）不重试——重试只会原样再失败一次。
+// checkin_retry_test.go Закреплённая отметка/Ограниченный ретрай транзиентных ошибок биллинговых вызовов обслуживания баланса:
+// апстрим 5xx（На практике встречается эпизодически code 10000 / http 500）и ретрай при сетевом джиттере, бизнес-ошибка (уже чекин/
+// ошибка параметра) — без ретрая, ретрай лишь повторит ту же ошибку.
 package upstream
 
 import (
@@ -14,7 +14,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// shortBillingRetry 测试用重试间隔（生产 2s 会让单测秒级膨胀）。
+// shortBillingRetry Интервал ретрая для тестов (прод 2s раздует юнит-тесты до секунд).
 func shortBillingRetry(t *testing.T) {
 	t.Helper()
 	old := billingRetryDelay
@@ -35,10 +35,10 @@ func TestDailyCheckinRetriesTransient500(t *testing.T) {
 		return jsonResp(200, `{"code":0,"data":{}}`), nil
 	})
 	if err := c.DailyCheckin(&auth.Auth{AccessToken: "at"}); err != nil {
-		t.Fatalf("首次 500 应重试成功，err=%v", err)
+		t.Fatalf("Впервые 500 Должен успешно повториться,err=%v", err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
-		t.Fatalf("calls=%d want 2（1 次失败 + 1 次重试）", n)
+		t.Fatalf("calls=%d want 2（1 неудач + 1 попыток повтора)", n)
 	}
 }
 
@@ -51,10 +51,10 @@ func TestDailyCheckinRetriesExhausted(t *testing.T) {
 	})
 	err := c.DailyCheckin(&auth.Auth{AccessToken: "at"})
 	if err == nil {
-		t.Fatal("持续 500 应返回错误")
+		t.Fatal("продолжается 500 должен вернуть ошибку")
 	}
 	if n := atomic.LoadInt32(&calls); n != 3 {
-		t.Fatalf("calls=%d want 3（1 次 + 2 次重试封顶）", n)
+		t.Fatalf("calls=%d want 3（1 Раз + 2 попыток ретрая — лимит)", n)
 	}
 }
 
@@ -63,15 +63,15 @@ func TestDailyCheckinNoRetryOnBusinessError(t *testing.T) {
 	var calls int32
 	c := testClient(func(r *http.Request) (*http.Response, error) {
 		atomic.AddInt32(&calls, 1)
-		// 「今天已签到」是业务幂等拒绝（code!=0），重试无意义。
-		return jsonResp(200, `{"code":14001,"msg":"今日已签到"}`), nil
+		// 「«Сегодня уже отмечено» — бизнес-отказ идемпотентности (code!=0），Повтор бессмысленен.
+		return jsonResp(200, `{"code":14001,"msg":"Сегодня уже отмечено"}`), nil
 	})
 	err := c.DailyCheckin(&auth.Auth{AccessToken: "at"})
 	if err == nil || !IsAlreadyCheckin(err) {
 		t.Fatalf("err=%v want already-checkin business error", err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 1 {
-		t.Fatalf("calls=%d want 1（业务错误不重试）", n)
+		t.Fatalf("calls=%d want 1（Бизнес-ошибки не ретраятся)", n)
 	}
 }
 
@@ -83,10 +83,10 @@ func TestDailyCheckinNoRetryOn4xx(t *testing.T) {
 		return jsonResp(403, `{"code":11140,"msg":"request illegal"}`), nil
 	})
 	if err := c.DailyCheckin(&auth.Auth{AccessToken: "at"}); err == nil {
-		t.Fatal("403 应返回错误")
+		t.Fatal("403 должен вернуть ошибку")
 	}
 	if n := atomic.LoadInt32(&calls); n != 1 {
-		t.Fatalf("calls=%d want 1（4xx 非瞬时，不重试）", n)
+		t.Fatalf("calls=%d want 1（4xx не мгновенно, без ретрая)", n)
 	}
 }
 
@@ -109,6 +109,6 @@ func TestUserResourceDetailedRetriesTransient500(t *testing.T) {
 		t.Fatalf("remain=%d err=%v, want 60 nil", remain, err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
-		t.Fatalf("calls=%d want 2（1 次失败 + 1 次重试）", n)
+		t.Fatalf("calls=%d want 2（1 неудач + 1 попыток повтора)", n)
 	}
 }

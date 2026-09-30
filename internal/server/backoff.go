@@ -1,6 +1,6 @@
-// backoff.go 轮转退避与抖动的单一事实来源（WAF 403 修复 P0-2/P0-1 共用）：
-// 指数基数/封顶/抖动比例一处定义，chatCompletions 轮转退避与 WAF 软冷却基数
-// （handler.wafCooldownBase）共用同一 jitterDur，不在 handler 与 upstream 各写一份。
+// backoff.go Единственный источник истины для ротационного бэкоффа и джиттера (WAF 403 исправление P0-2/P0-1 общий):
+// основание экспоненты/Потолок/коэффициент jitter определяется в одном месте,chatCompletions ротационный бэкофф и WAF База мягкого кулдауна
+// （handler.wafCooldownBase）Используют общий jitterDur，не в handler и upstream записать каждому по копии.
 package server
 
 import (
@@ -9,22 +9,22 @@ import (
 	"time"
 )
 
-// rotateBackoffBase 轮转退避基数（对齐官方 intl CLI computeRequestRetryDelayMs
-// 的 500ms 形态，WAF 403 并发研究报告 §2.1/§6 P0-2）。测试可置 0 跳过等待
-// （TestMain 已置 0 加速轮转测试；退避界断言测试临时恢复）。
+// rotateBackoffBase базис ротационного бэкоффа (выравнивание с официальным intl CLI computeRequestRetryDelayMs
+// 500ms форма,WAF 403 Отчёт о конкурентном исследовании §2.1/§6 P0-2）。в тесте можно установить 0 Пропустить ожидание
+// （TestMain Уже установлено 0 ускорение теста ротации; тест assert'а границы бэкоффа временно восстановлен).
 var rotateBackoffBase = 500 * time.Millisecond
 
 const (
-	// rotateBackoffCap 轮转退避封顶（报告 P0-2 建议 8s：轮转上限默认 3 次，
-	// 实际等待序列 500ms/1s，封顶只约束极端配置下的 MaxRotate）。
+	// rotateBackoffCap Потолок ротационного бэкоффа (отчёт P0-2 Рекомендация 8s：Лимит ротации по умолчанию 3 раз,
+	// фактическая очередь ожидания 500ms/1s，лимит ограничивает только при экстремальной конфигурации MaxRotate）。
 	rotateBackoffCap = 8 * time.Second
-	// jitterFraction 抖动比例（±25%，对齐 intl CLI delay×(1±0.25) 形态）。
+	// jitterFraction Коэффициент джиттера (±25%，Выравнивание intl CLI delay×(1±0.25) форма).
 	jitterFraction = 0.25
 )
 
-// jitterDur 给时长施加 ±jitterFraction 的均匀抖动，返回 [d·(1-f), d·(1+f)] 区间值。
-// d<=0 原样返回（零等待不抖动）。抖动目的是打散多请求同相位重试（WAF 频控按
-// 密度判罚，齐步走的退避会以固定周期再次聚团）。
+// jitterDur Применить ограничение к длительности ±jitterFraction равномерный джиттер, возвращает [d·(1-f), d·(1+f)] значение интервала.
+// d<=0 Возврат как есть (нулевое ожидание без джиттера). Джиттер нужен для разнесения синфазных ретраев множества запросов (WAF Rate limit по
+// штраф за плотность, синхронный бэкофф снова скучкуется с фиксированным периодом).
 func jitterDur(d time.Duration) time.Duration {
 	if d <= 0 {
 		return d
@@ -37,9 +37,9 @@ func jitterDur(d time.Duration) time.Duration {
 	return out
 }
 
-// backoffAfter 返回第 n 次轮转（0 基：首次失败换号前 n=0）前应等待的退避时长：
-// base·2^n 封顶 rotateBackoffCap，再施加 ±25% 抖动。base 置 0（测试）时恒 0。
-// 用逐次翻倍而非位移：base 调整后无需同步维护移位上限，溢出由封顶比较兜底。
+// backoffAfter Вернуть № n ротация по раундам (0 База: до смены номера при первом сбое n=0）Длительность backoff перед ожиданием:
+// base·2^n Потолок rotateBackoffCap，повторно наложить ±25% джиттер.base Установить 0（при тесте) всегда 0。
+// Использовать последовательное удвоение вместо сдвига:base После корректировки не нужно синхронно поддерживать лимит сдвига, переполнение покрывается сравнением с потолком.
 func backoffAfter(n int) time.Duration {
 	d := rotateBackoffBase
 	if d <= 0 {
@@ -47,7 +47,7 @@ func backoffAfter(n int) time.Duration {
 	}
 	for k := 0; k < n && d < rotateBackoffCap; k++ {
 		d *= 2
-		if d <= 0 { // 翻倍溢出成非正数：直接按封顶处理
+		if d <= 0 { // Переполнение при удвоении в неположительное: считать как достижение лимита
 			return jitterDur(rotateBackoffCap)
 		}
 	}
@@ -57,9 +57,9 @@ func backoffAfter(n int) time.Duration {
 	return jitterDur(d)
 }
 
-// sleepCtx 可取消的等待：ctx 取消立即返回 false（客户端断连/优雅停机不必等退避
-// 睡醒），等满返回 true。d<=0 立即放行。与 scheduler.sleepCtx 同模式（该函数未
-// 导出且 scheduler 不宜被 server 反向依赖，按任务书「等价物」口径在消费侧实现）。
+// sleepCtx отменяемое ожидание:ctx отмена — немедленный возврат false（Отключение клиента/Graceful shutdown не ждёт бэкоффа
+// проснулся), ждать заполнения и вернуть true。d<=0 немедленный пропуск. И scheduler.sleepCtx Тот же режим (функция не
+// Экспорт и scheduler Не должен быть server Обратная зависимость, реализуется на стороне потребления по метрике "эквивалент» из ТЗ).
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return ctx.Err() == nil

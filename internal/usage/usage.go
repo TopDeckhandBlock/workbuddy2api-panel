@@ -1,17 +1,17 @@
-// Package usage 记录并聚合逐请求 token 用量，供面板「用量」视图展示。
+// Package usage Логировать и агрегировать по каждому запросу token Использование, для отображения в представлении "Использование» панели.
 //
-// 与 internal/pool 的 TokenUsage 的区别：
-//   - pool 的 TokenUsage 是**每账号一个累计计数器**，只保留总量与「最近一次」，
-//     没有时间维度，也无法按模型/时间下钻；
-//   - 本包按 (时间片, realm, uid, model, rate) 分桶累计，因此可以出「今天各模型各用了多少」
-//     「这一小时 prompt 涨得多快」这类问题，且能长期保留。
+// и internal/pool TokenUsage различие:
+// - pool TokenUsage Да**один накопительный счетчик на аккаунт**，сохранять только общее количество и "последний раз»,
+// Без временной размерности, фильтрация по модели невозможна/детализация по времени;
+// - Данный пакет по (Тайм-слайс, realm, uid, model, rate) Накопление по бакетам, поэтому можно вывести "сколько сегодня израсходовала каждая модель»
+// 「Этот час prompt "насколько быстро растет» и т.п., и может храниться долго.
 //
-// 保留策略（分片粒度自动降级，总量因此有界）：
-//   - 近 hourlyKeep 小时内：小时桶（细粒度，看尖峰）
-//   - 更早：折叠为日桶，**永久保留**（看长期趋势）
+// Стратегия хранения (автопонижение гранулярности шардов, общий объём ограничен):
+// - Близко hourlyKeep в пределах часа: часовой бакет (детально, для пиков)
+// - Ранее: свернуть в суточный бакет,**сохранять бессрочно**（см. долгосрочный тренд)
 //
-// 落盘：data/usage.json，原子替换 + 防抖刷新（默认 30s），重启不丢。
-// 桶数上界 ≈ 账号数 × 模型数 × (hourlyKeep + 已过天数)，实测单桶约 90 字节。
+// Сброс на диск:data/usage.json，Атомарная замена + debounce-обновление (по умолчанию 30s），Не теряется при перезапуске.
+// Верхняя граница числа бакетов ≈ Количество аккаунтов × Количество моделей × (hourlyKeep + Прошедших дней)，Фактически один бакет около 90 байт.
 package usage
 
 import (
@@ -26,85 +26,85 @@ import (
 	"time"
 )
 
-// hourlyKeep 小时桶的保留时长；超出后折叠为日桶。
+// hourlyKeep Время хранения часового бакета; при превышении сворачивается в суточный.
 const hourlyKeep = 90 * 24 * time.Hour
 
-// flushInterval 防抖落盘间隔。
+// flushInterval интервал дебаунса записи на диск.
 const flushInterval = 30 * time.Second
 
-// maxBuckets 桶数硬上限。超过时立即触发一次折叠，避免异常流量把内存/文件撑爆。
+// maxBuckets Жесткий лимит числа бакетов. При превышении немедленно запустить свертку, чтобы аномальный трафик не исчерпал память/файл переполнен.
 const maxBuckets = 400_000
 
-// hourLayout / dayLayout 分片键的时间格式（本地时区，与用户直觉一致）。
+// hourLayout / dayLayout Формат времени ключа шардирования (локальный часовой пояс, соответствует интуиции пользователя).
 const (
 	hourLayout = "2006-01-02T15"
-	dayLayout  = "2006-01-02"
+	dayLayout = "2006-01-02"
 )
 
-// fileVersion 是 usage.json 的当前格式版本。版本 2 增加积分观测字段，版本 3
-// 增加模型生效倍率分区；旧版本缺失字段按零值加载，旧数据不会丢弃。
+// fileVersion Да usage.json текущая версия формата. Версия 2 добавить поле наблюдения баллов, версия 3
+// добавлено секционирование множителя применения модели; отсутствующие поля старых версий загружаются как ноль, старые данные не отбрасываются.
 const fileVersion = 3
 
-// bucket 一个 (时间片, realm, uid, model, rate) 的累计量。
-// JSON 字段名刻意取短，因为桶数量会随时间增长。
+// bucket Один (Тайм-слайс, realm, uid, model, rate) накопленный объем.
+// JSON имя поля намеренно короткое, т.к. число бакетов растёт со временем.
 type bucket struct {
-	Scope string  `json:"s"`            // "h:2006-01-02T15" 或 "d:2006-01-02"
-	Realm string  `json:"r"`            // cn / global
-	UID   string  `json:"u"`            // 账号 uid
-	Model string  `json:"m"`            // 上游裸模型名
-	Rate  string  `json:"x,omitempty"`  // 请求时生效积分倍率（规范化数值；旧桶为空）
-	Req   int64   `json:"q"`            // 请求数（含失败）
-	Err   int64   `json:"e"`            // 失败数
-	PT    int64   `json:"p"`            // prompt tokens
-	CT    int64   `json:"c"`            // completion tokens
-	TT    int64   `json:"t"`            // total tokens（上游给什么用什么的合计）
-	LatMs int64   `json:"l"`            // 延迟累计（ms）
-	LatN  int64   `json:"ln"`           // 延迟样本数
-	TPS   float64 `json:"v"`            // 吐字速率累计
-	TPSN  int64   `json:"vn"`           // 速率样本数
-	CR    float64 `json:"cr,omitempty"` // usage.credit 累计（仅明确存在的观测）
-	CRN   int64   `json:"cn,omitempty"` // usage.credit 样本数（区分缺字段与真实 0）
-	CRT   int64   `json:"ct,omitempty"` // 同时具备 credit 与 token 的 Token 合计
+	Scope string `json:"s"` // »h:2006-01-02T15« Или »d:2006-01-02"
+	Realm string `json:"r"` // cn / global
+	UID string `json:"u"` // Аккаунт uid
+	Model string `json:"m"` // Исходное имя модели апстрима
+	Rate string `json:"x,omitempty"` // Действующий на момент запроса множитель баллов (нормализованное значение; старый бакет пуст)
+	Req int64 `json:"q"` // число запросов (включая неудачные)
+	Err int64 `json:"e"` // Количество неудач
+	PT int64 `json:"p"` // prompt tokens
+	CT int64 `json:"c"` // completion tokens
+	TT int64 `json:"t"` // total tokens（сумма как отдал апстрим)
+	LatMs int64 `json:"l"` // накопление задержки (ms）
+	LatN int64 `json:"ln"` // количество выборок задержки
+	TPS float64 `json:"v"` // Накопленная скорость вывода
+	TPSN int64 `json:"vn"` // Кол-во выборок скорости
+	CR float64 `json:"cr,omitempty"` // usage.credit Накопительно (только явно существующие наблюдения)
+	CRN int64 `json:"cn,omitempty"` // usage.credit Число выборок (различать отсутствие поля и реальное 0）
+	CRT int64 `json:"ct,omitempty"` // одновременно имеет credit и token Token Итого
 }
 
-// file 落盘结构。
+// file Структура на диске.
 type file struct {
-	Version int      `json:"version"`
-	Saved   string   `json:"saved"`
+	Version int `json:"version"`
+	Saved string `json:"saved"`
 	Buckets []bucket `json:"buckets"`
 }
 
-// Recorder 并发安全的用量记录器。
+// Recorder потокобезопасный счётчик использования.
 type Recorder struct {
-	mu      sync.Mutex
-	path    string
+	mu sync.Mutex
+	path string
 	buckets map[string]*bucket // key: scope|realm|uid|model|rate
-	dirty   bool
+	dirty bool
 	started time.Time
 
 	stopOnce sync.Once
-	stop     chan struct{}
-	done     chan struct{}
+	stop chan struct{}
+	done chan struct{}
 }
 
-// New 创建记录器。path 为空时禁用落盘（纯内存，测试用）。
+// New Создать логгер.path при пустом значении запись на диск отключена (только память, для тестов).
 func New(path string) *Recorder {
 	r := &Recorder{
-		path:    path,
+		path: path,
 		buckets: make(map[string]*bucket),
 		started: time.Now(),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		stop: make(chan struct{}),
+		done: make(chan struct{}),
 	}
 	if path != "" {
 		if err := r.load(); err != nil {
-			log.Printf("[usage] 读取 %s 失败（从零开始）: %v", path, err)
+			log.Printf("[usage] Чтение %s сбой (начиная с нуля): %v", path, err)
 		}
 	}
 	return r
 }
 
-// Start 启动后台防抖落盘与折叠。Stop 前一直运行。
+// Start Запустить фоновую запись с дебаунсом и свёртку.Stop до этого работал непрерывно.
 func (r *Recorder) Start() {
 	go func() {
 		defer close(r.done)
@@ -128,33 +128,33 @@ func (r *Recorder) Start() {
 	}()
 }
 
-// Stop 停止后台循环并做最后一次落盘。
+// Stop остановить фоновый цикл и выполнить финальный flush на диск.
 func (r *Recorder) Stop() {
 	r.stopOnce.Do(func() { close(r.stop) })
 	<-r.done
 }
 
-// Delta 一次请求尝试的用量增量（与 pool.TokenUsageDelta 同形，避免包间依赖）。
+// Delta прирост расхода за одну попытку запроса (с pool.TokenUsageDelta той же формы, избегать межпакетных зависимостей).
 type Delta struct {
-	PromptTokens     int64
-	HasPromptTokens  bool
+	PromptTokens int64
+	HasPromptTokens bool
 	CompletionTokens int64
-	HasCompletion    bool
-	TotalTokens      int64
-	HasTotal         bool
-	Credit           float64
-	HasCredit        bool
-	ModelRate        string
-	LatencyMs        int64
-	HasLatency       bool
-	TokensPerSecond  float64
-	HasTPS           bool
+	HasCompletion bool
+	TotalTokens int64
+	HasTotal bool
+	Credit float64
+	HasCredit bool
+	ModelRate string
+	LatencyMs int64
+	HasLatency bool
+	TokensPerSecond float64
+	HasTPS bool
 }
 
-// Add 记录一次请求尝试。
+// Add Записать одну попытку запроса.
 //
-// ok=false 表示该次尝试失败（传输错误 / 上游 >=400 / 解析失败）。失败尝试通常
-// 没有 usage，但**仍要计入请求数与失败数**——重试放大正是靠这一列才看得出来。
+// ok=false означает неудачу попытки (ошибка передачи / апстрим >=400 / Ошибка парсинга). Неудачные попытки обычно
+// Отсутствует usage，Но**всё равно учитывается в счётчиках запросов и ошибок**——усиление ретраев видно только по этой колонке.
 func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool) {
 	if r == nil {
 		return
@@ -189,14 +189,14 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 	if d.HasTotal {
 		b.TT += d.TotalTokens
 	} else if d.HasPromptTokens || d.HasCompletion {
-		// 上游没给 total：用 pt+ct 兜底，保证总量口径连续。
+		// Апстрим не передал total：использовать pt+ct fallback, гарантирующий непрерывность общей метрики.
 		b.TT += d.PromptTokens + d.CompletionTokens
 	}
 	if d.HasCredit {
 		b.CR += d.Credit
 		b.CRN++
-		// 比例只使用同一次请求同时具备 credit 与 token 的样本，避免把
-		// 仅 token 的旧记录或仅 credit 的观测混进分母。
+		// Пропорция использует только одновременно имеющиеся в одном запросе credit и token выборок, избегать
+		// Только token старые записи или только credit наблюдения примешиваются в знаменатель.
 		if d.HasTotal {
 			b.CRT += d.TotalTokens
 		} else if d.HasPromptTokens || d.HasCompletion {
@@ -214,8 +214,8 @@ func (r *Recorder) Add(now time.Time, realm, uid, model string, d Delta, ok bool
 	r.dirty = true
 }
 
-// Rollup 把超出 hourlyKeep 的小时桶折叠为日桶（按本地日历日）。
-// 幂等：同一小时反复折叠不会重复计数（先累加再删源桶）。
+// Rollup вынести превышающее hourlyKeep часовые бакеты сворачиваются в суточные (по локальному календарному дню).
+// Идемпотентность: повторное сворачивание в пределах одного часа не дублирует подсчет (сначала суммирование, затем удаление исходного бакета).
 func (r *Recorder) Rollup(now time.Time) {
 	if r == nil {
 		return
@@ -267,11 +267,11 @@ func (r *Recorder) Rollup(now time.Time) {
 	}
 	if len(moves) > 0 {
 		r.dirty = true
-		log.Printf("[usage] 折叠 %d 个小时桶为日桶（保留 %v 细粒度）", len(moves), hourlyKeep)
+		log.Printf("[usage] Свернуть %d часовых бакетов как дневной бакет (сохранение %v гранулярность)", len(moves), hourlyKeep)
 	}
 }
 
-// ---------------------------------------------------------------- 持久化 ----
+// ---------------------------------------------------------------- Персистентность ----
 
 func (r *Recorder) load() error {
 	raw, err := os.ReadFile(r.path)
@@ -289,7 +289,7 @@ func (r *Recorder) load() error {
 		b := f.Buckets[i]
 		r.buckets[b.Scope+"|"+b.Realm+"|"+b.UID+"|"+b.Model+"|"+b.Rate] = &b
 	}
-	log.Printf("[usage] 已恢复 %d 个用量桶（%s）", len(r.buckets), r.path)
+	log.Printf("[usage] Восстановлено %d бакетов использования (%s）", len(r.buckets), r.path)
 	return nil
 }
 
@@ -311,50 +311,50 @@ func (r *Recorder) flush(force bool) {
 
 	raw, err := json.Marshal(snap)
 	if err != nil {
-		log.Printf("[usage] 序列化失败: %v", err)
+		log.Printf("[usage] Ошибка сериализации: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
-		log.Printf("[usage] 建目录失败: %v", err)
+		log.Printf("[usage] ошибка создания каталога: %v", err)
 		return
 	}
 	tmp := r.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("[usage] 写临时文件失败: %v", err)
+		log.Printf("[usage] ошибка записи временного файла: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, r.path); err != nil {
-		log.Printf("[usage] 原子替换失败: %v", err)
+		log.Printf("[usage] Сбой атомарной замены: %v", err)
 	}
 }
 
-// Save 立即落盘（面板「刷新」或关闭前调用）。
+// Save Немедленная запись на диск (вызов при "Обновить» панели или перед закрытием).
 func (r *Recorder) Save() { r.flush(true) }
 
-// ---------------------------------------------------------------- 聚合 ----
+// ---------------------------------------------------------------- Агрегация ----
 
-// Agg 一组累计量。
+// Agg группа накопительных показателей.
 type Agg struct {
-	Requests           int64   `json:"requests"`
-	Errors             int64   `json:"errors"`
-	PromptTokens       int64   `json:"prompt_tokens"`
-	CompletionTok      int64   `json:"completion_tokens"`
-	TotalTokens        int64   `json:"total_tokens"`
-	Credits            float64 `json:"credits"`
-	CreditSamples      int64   `json:"credit_samples"`
-	CreditTokens       int64   `json:"credit_tokens"`
+	Requests int64 `json:"requests"`
+	Errors int64 `json:"errors"`
+	PromptTokens int64 `json:"prompt_tokens"`
+	CompletionTok int64 `json:"completion_tokens"`
+	TotalTokens int64 `json:"total_tokens"`
+	Credits float64 `json:"credits"`
+	CreditSamples int64 `json:"credit_samples"`
+	CreditTokens int64 `json:"credit_tokens"`
 	CreditsPer1MTokens float64 `json:"credits_per_1m_tokens"`
-	AvgLatencyMs       float64 `json:"avg_latency_ms"`
-	AvgTPS             float64 `json:"avg_tokens_per_second"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	AvgTPS float64 `json:"avg_tokens_per_second"`
 }
 
-// aggAcc 是聚合过程中的累加器：Agg 只放已算好的结果，均值需要样本数才能
-// 正确加权（不能对每桶的均值再取平均），所以样本数留在这里。
+// aggAcc — аккумулятор в процессе агрегации:Agg Хранить только готовые результаты, для среднего нужно количество выборок
+// Корректное взвешивание (нельзя усреднять средние по бакетам), поэтому количество сэмплов сохраняется здесь.
 type aggAcc struct {
 	Agg
-	latSum     int64
+	latSum int64
 	latSamples int64
-	tpsSum     float64
+	tpsSum float64
 	tpsSamples int64
 }
 
@@ -387,32 +387,32 @@ func (g *aggAcc) finish() Agg {
 	return a
 }
 
-// KeyedAgg 按某个维度聚合的一行。
+// KeyedAgg Строка, агрегированная по измерению.
 type KeyedAgg struct {
-	Key   string `json:"key"`
+	Key string `json:"key"`
 	Realm string `json:"realm,omitempty"`
-	Extra string `json:"extra,omitempty"` // 账号行放昵称
+	Extra string `json:"extra,omitempty"` // в строке аккаунта — никнейм
 	Agg
 }
 
-// Point 时序上的一个点。
+// Point Точка на временной шкале.
 type Point struct {
-	T     string `json:"t"`
+	T string `json:"t"`
 	Scope string `json:"scope"` // "hour" | "day"
 	Agg
 }
 
-// CreditAgg 积分扣除统计的一行。Key 在账号维度是 UID，在模型维度是裸模型名；
-// Rate 仅模型维度使用；比例分母只统计与 credit 同时存在的 Token 样本。
+// CreditAgg строка статистики списания баллов.Key на уровне аккаунта это UID，В разрезе модели — голое имя модели;
+// Rate Используется только в разрезе модели; знаменатель доли учитывает только credit Одновременно существующих Token выборка.
 type CreditAgg struct {
-	Key                string  `json:"key"`
-	Realm              string  `json:"realm,omitempty"`
-	Nickname           string  `json:"nickname,omitempty"`
-	Rate               string  `json:"rate,omitempty"`
-	Requests           int64   `json:"requests"`
-	Credits            float64 `json:"credits"`
-	CreditSamples      int64   `json:"credit_samples"`
-	CreditTokens       int64   `json:"credit_tokens"`
+	Key string `json:"key"`
+	Realm string `json:"realm,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	Rate string `json:"rate,omitempty"`
+	Requests int64 `json:"requests"`
+	Credits float64 `json:"credits"`
+	CreditSamples int64 `json:"credit_samples"`
+	CreditTokens int64 `json:"credit_tokens"`
 	CreditsPer1MTokens float64 `json:"credits_per_1m_tokens"`
 }
 
@@ -435,41 +435,41 @@ func (a *creditAcc) finish() CreditAgg {
 	return out
 }
 
-// Snapshot 面板一次拉取的全部用量视图数据。
+// Snapshot все данные представления использования, полученные панелью за один фетч.
 type Snapshot struct {
-	Totals          Agg         `json:"totals"`
-	ByRealm         []KeyedAgg  `json:"by_realm"`
-	ByAccount       []KeyedAgg  `json:"by_account"`
-	ByModel         []KeyedAgg  `json:"by_model"`
-	Series          []Point     `json:"series"`
+	Totals Agg `json:"totals"`
+	ByRealm []KeyedAgg `json:"by_realm"`
+	ByAccount []KeyedAgg `json:"by_account"`
+	ByModel []KeyedAgg `json:"by_model"`
+	Series []Point `json:"series"`
 	CreditByAccount []CreditAgg `json:"credit_by_account"`
-	CreditByModel   []CreditAgg `json:"credit_by_model"`
-	Buckets         int         `json:"buckets"`
-	FileBytes       int64       `json:"file_bytes"`
-	Since           string      `json:"since,omitempty"`
-	// WindowFrom/WindowTo 本次实际生效的统计区间（本地时间，RFC3339），供面板
-	// 回显口径——「自定义」区间下用户必须能确认服务端到底按哪段算的。
-	// 空串 = 该侧不设界（全部历史 / 到今天为止）。
+	CreditByModel []CreditAgg `json:"credit_by_model"`
+	Buckets int `json:"buckets"`
+	FileBytes int64 `json:"file_bytes"`
+	Since string `json:"since,omitempty"`
+	// WindowFrom/WindowTo Фактический статистический интервал этого раза (локальное время,RFC3339），для панели
+	// Калибр отображения — в интервале "Кастом» пользователь должен видеть, по какому именно отрезку считает сервер.
+	// Пустая строка = на этой стороне без ограничения (вся история / по сегодня).
 	WindowFrom string `json:"window_from,omitempty"`
-	WindowTo   string `json:"window_to,omitempty"`
-	Generated  string `json:"generated"`
+	WindowTo string `json:"window_to,omitempty"`
+	Generated string `json:"generated"`
 }
 
-// Window 用量统计窗口。三种口径按优先级解析（见 bounds）：
-//   - From/To 任一非零 → 显式区间 [From, To]（To 零值 = 不设上界）
-//   - 否则 Hours>0     → 滚动窗口：当前整点往回 Hours-1 小时
-//   - 否则             → 全部历史
+// Window окно статистики использования. Три калибра парсятся по приоритету (см. bounds）：
+// - From/To Любое ненулевое → Явный интервал [From, To]（To нулевое значение = без верхнего лимита)
+// - Иначе Hours>0 → Скользящее окно: назад от текущего часа Hours-1 ч
+// - Иначе → Вся история
 //
-// 为什么显式区间用「桶起点落在 [From, To] 内」判定而不是求交集：小时桶的粒度
-// 就是一小时，用户选到 14:00 时把 14:00 这一小时的桶算进来符合直觉；同时这也
-// 让 Hours 口径与历史行为逐位一致（原实现就是 ts.Before(from) 即跳过）。
+// Почему для явного интервала используется "начало бакета попадает в [From, To] внутри» а не пересечение: гранулярность часового бакета
+// ровно один час, пользователь выбирает до 14:00 при этом 14:00 Включение бакета текущего часа интуитивно; при этом это также
+// разрешить Hours Метрика побитово совпадает с историческим поведением (исходная реализация — ts.Before(from) то пропустить).
 type Window struct {
 	Hours int
-	From  time.Time
-	To    time.Time
+	From time.Time
+	To time.Time
 }
 
-// bounds 解析出实际生效的 [from, to]；零值表示该侧不设界。
+// bounds распарсить фактически действующий [from, to]；Ноль означает отсутствие лимита на этой стороне.
 func (w Window) bounds() (time.Time, time.Time) {
 	if !w.From.IsZero() || !w.To.IsZero() {
 		return w.From, w.To
@@ -484,7 +484,7 @@ func (w Window) bounds() (time.Time, time.Time) {
 	return time.Now().Truncate(time.Hour).Add(-time.Duration(h-1) * time.Hour), time.Time{}
 }
 
-// bucketTime 把桶 scope 解析成本地时间；脏 scope 返回 false（不进任何口径）。
+// bucketTime Переместить бакет scope Парсить как локальное время; грязные scope вернуть false（Не попадает ни в один срез).
 func bucketTime(scope string) (time.Time, bool) {
 	if strings.HasPrefix(scope, "h:") {
 		ts, err := time.ParseInLocation(hourLayout, strings.TrimPrefix(scope, "h:"), time.Local)
@@ -494,33 +494,33 @@ func bucketTime(scope string) (time.Time, bool) {
 	return ts, err == nil
 }
 
-// Snapshot 聚合**所选窗口内**的桶，产出面板一次拉取的全部用量视图数据。
+// Snapshot Агрегация**в выбранном окне**бакет, формирует все данные представления использования за один pull панели.
 //
-// hours>0：窗口 = [当前整点-(hours-1)小时, now]，卡片汇总/按域/按账号/按模型/
-// 时序**全部**按同一窗口口径统计——切窗口时所有数字随之变化（曾长期是"卡片为
-// 全部历史累计、hours 只改时序分片"的口径，界面上被读成"筛选没生效"，已废弃）。
-// 小时桶按整点入窗；日桶（Rollup 折叠出的长期数据）按日起点入窗，故小时窗口
-// 天然不含更早的日桶。
-// hours<=0：全部历史（含已折叠日桶），供「全部历史」选项看长期趋势。
+// hours>0：Окно = [текущий час (ровно)-(hours-1)ч, now]，Сводка карточек/по домену/По аккаунту/по модели/
+// Последовательность**все**Подсчёт по единому окну — при смене окна все числа меняются (долгое время было"Карточка —
+// накоплено за всю историю,hours меняется только временной шард"в этой трактовке, в интерфейсе читается как«фильтрация не сработала"，уже deprecated).
+// часовой бакет по ровному часу; суточный бакет (Rollup свернутые долгосрочные данные) входят в окно от начала суток, поэтому часовое окно
+// естественно не содержит более ранних дневных бакетов.
+// hours<=0：Вся история (включая свёрнутые дневные бакеты) для просмотра долгосрочного тренда в опции "Вся история».
 //
-// nicks 是 uid→昵称映射，仅用于展示。
+// nicks Да uid→Маппинг никнеймов, только для отображения.
 func (r *Recorder) Snapshot(hours int, nicks map[string]string) Snapshot {
 	return r.SnapshotWithRates(hours, nicks, nil)
 }
 
-// SnapshotWithRates 与 Snapshot 相同，但允许为缺少历史倍率的旧桶提供当前
-// 模型倍率回填。currentRate 返回空串时该行按“未知倍率”聚合，不伪造价格。
+// SnapshotWithRates и Snapshot аналогично, но для старых бакетов без исторического множителя подставлять текущий
+// обратная заливка коэффициента модели.currentRate При возврате пустой строки строка считается как“Неизвестный коэффициент”Агрегация, без подделки цены.
 func (r *Recorder) SnapshotWithRates(hours int, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
 	return r.SnapshotWindow(Window{Hours: hours}, nicks, currentRate)
 }
 
-// SnapshotWindow 聚合**所选窗口内**的桶，产出面板一次拉取的全部用量视图数据。
+// SnapshotWindow Агрегация**в выбранном окне**бакет, формирует все данные представления использования за один pull панели.
 //
-// 窗口语义见 Window：滚动窗口（Hours）/ 显式区间（From-To）/ 全部历史。卡片汇总、
-// 按域、按账号、按模型、时序**全部**按同一窗口口径统计——切窗口时所有数字随之变化
-// （曾长期是"卡片为全部历史累计、hours 只改时序分片"的口径，界面上被读成"筛选没
-// 生效"，已废弃）。小时桶按整点入窗；日桶（Rollup 折叠出的长期数据）按日起点入窗，
-// 故小时窗口天然不含更早的日桶。
+// семантика окна см. Window：скользящее окно (Hours）/ Явный интервал (From-To）/ Вся история. Сводка карточек,
+// По домену, по аккаунту, по модели, по времени**все**Статистика по единому окну — при переключении окна все показатели меняются синхронно
+// （долгое время был"Карточка — кумулятивно за всю историю,hours меняется только временной шард«в этой трактовке, в интерфейсе читается как"фильтр не
+// Вступает в силу"，устарело). Часовой бакет входит в окно по ровному часу; суточный бакет (Rollup свернутые долгоживущие данные) попадают в окно по началу суток,
+// поэтому часовое окно естественно не включает более ранние дневные бакеты.
 func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate func(realm, model string) string) Snapshot {
 	if r == nil {
 		return Snapshot{Generated: time.Now().Format(time.RFC3339)}
@@ -547,8 +547,8 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 	creditModelAgg := map[string]*creditAcc{}
 	rateCache := map[string]string{}
 
-	// 数据起点（全库最早分片）：不受窗口影响，表示"记录自何时开始"。scope 字典序
-	// 即时间序（同前缀内同格式排序；"d:" 恒早于 "h:"——日桶只来自 90 天前的小时折叠）。
+	// Начало данных (самый ранний шард всей БД): не зависит от окна, означает"Запись с какого момента началась"。scope Лексикографический порядок
+	// т.е. хронологический порядок (сортировка одного формата внутри одного префикса;"d:« Всегда раньше "h:"——Дневной бакет только из 90 Свертка часов за N дней).
 	since := ""
 	matched := 0
 	for i := range bs {
@@ -558,7 +558,7 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 		}
 		if windowed {
 			ts, ok := bucketTime(b.Scope)
-			// 解析失败的脏桶不进窗口聚合（也不该出现在任何口径里）。
+			// Невалидные бакеты с ошибкой парсинга не попадают в оконную агрегацию (и не должны учитываться ни в одной метрике).
 			if !ok {
 				continue
 			}
@@ -581,8 +581,8 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 			acctAgg[b.UID] = &aggAcc{}
 		}
 		acctAgg[b.UID].add(b)
-		// 一个账号只属于一个 realm，这里记下来供前端展示「域」列；
-		// keyed() 的 Realm 字段默认是空的（它按 key 分组，不知道 realm）。
+		// Один аккаунт принадлежит только одному realm，записать здесь для отображения колонки "домен» на фронте;
+		// keyed() Realm Поле по умолчанию пустое (оно по key группировка, неизвестно realm）。
 		if acctRealm[b.UID] == "" {
 			acctRealm[b.UID] = b.Realm
 		}
@@ -609,8 +609,8 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 			ca := creditAcctAgg[b.UID]
 			if ca == nil {
 				ca = &creditAcc{CreditAgg: CreditAgg{
-					Key:      b.UID,
-					Realm:    b.Realm,
+					Key: b.UID,
+					Realm: b.Realm,
 					Nickname: nicks[b.UID],
 				}}
 				creditAcctAgg[b.UID] = ca
@@ -646,17 +646,17 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 		ByAccount: keyed(acctAgg, func(k string) (string, string) {
 			return k, nicks[k]
 		}),
-		ByModel:         keyed(modelAgg, func(k string) (string, string) { return k, "" }),
+		ByModel: keyed(modelAgg, func(k string) (string, string) { return k, "" }),
 		CreditByAccount: creditKeyed(creditAcctAgg),
-		CreditByModel:   creditKeyed(creditModelAgg),
-		Buckets:         matched,
-		Generated:       time.Now().Format(time.RFC3339),
+		CreditByModel: creditKeyed(creditModelAgg),
+		Buckets: matched,
+		Generated: time.Now().Format(time.RFC3339),
 	}
 	for i := range snap.ByAccount {
 		snap.ByAccount[i].Realm = acctRealm[snap.ByAccount[i].Key]
 	}
 
-	// 日点（升序）+ 小时点（升序）拼成一条连续时序。
+	// точки дня (по возрастанию)+ часовые точки (по возрастанию) склеиваются в непрерывную временную последовательность.
 	dayKeys := make([]string, 0, len(daySeries))
 	for k := range daySeries {
 		dayKeys = append(dayKeys, k)
@@ -679,11 +679,11 @@ func (r *Recorder) SnapshotWindow(w Window, nicks map[string]string, currentRate
 			snap.FileBytes = fi.Size()
 		}
 	}
-	// since 去掉 scope 前缀（"h:2026-09-16T13" → "2026-09-16T13"）给前端展示；
-	// 无任何桶时保持空（无数据不伪造起点）。
+	// since Удалить scope Префикс («h:2026-09-16T13« → "2026-09-16T13«）Для отображения на фронтенде;
+	// При отсутствии бакетов остается пустым (без данных не подделывать начало).
 	snap.Since = strings.TrimPrefix(strings.TrimPrefix(since, "h:"), "d:")
-	// 回显实际生效的区间：**仅显式区间口径**。滚动窗口由 hours 表达（前端自己
-	// 知道选的是哪个预设），全部历史没有区间——两者回显都会变成噪音。
+	// Отображение фактически действующего интервала:**только явный диапазон**。скользящее окно от hours выражение (фронтенд сам
+	// известно, какой пресет выбран), вся история без интервалов — оба отображения станут шумом.
 	if explicit {
 		if !w.From.IsZero() {
 			snap.WindowFrom = w.From.Format(time.RFC3339)
@@ -735,7 +735,7 @@ func keyed(m map[string]*aggAcc, label func(string) (string, string)) []KeyedAgg
 		key, extra := label(k)
 		out = append(out, KeyedAgg{Key: key, Extra: extra, Agg: v.finish()})
 	}
-	// 按总量降序；同量按 key 升序，保证输出稳定（前端 diff 不抖）。
+	// Сортировка по общему объёму по убыванию; при равенстве по key По возрастанию, гарантирует стабильный вывод (фронтенд diff без джиттера).
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].TotalTokens != out[j].TotalTokens {
 			return out[i].TotalTokens > out[j].TotalTokens
@@ -748,7 +748,7 @@ func keyed(m map[string]*aggAcc, label func(string) (string, string)) []KeyedAgg
 	return out
 }
 
-// Describe 返回一行人类可读的占用摘要（启动日志用）。
+// Describe Возвращает однострочную человекочитаемую сводку занятости (для лога запуска).
 func (r *Recorder) Describe() string {
 	if r == nil {
 		return "disabled"

@@ -43,7 +43,7 @@ func TestNextFireMergesSchedules(t *testing.T) {
 	}
 }
 
-// TestNextWakeKeepaliveOnly 签到已过点时按保活整点唤醒。
+// TestNextWakeKeepaliveOnly если время check-in прошло — пробуждение по keepalive ровно в час.
 func TestNextWakeKeepaliveOnly(t *testing.T) {
 	s := New(Config{CheckinHours: []int{9}, KeepaliveHours: []int{22},
 		TravelDisabled: true, ActivityDisabled: true})
@@ -56,14 +56,14 @@ func TestNextWakeKeepaliveOnly(t *testing.T) {
 	}
 }
 
-// TestNextWakeSameInstantFiresAll 签到与保活配到同一整点时两类任务都要执行。
+// TestNextWakeSameInstantFiresAll когда check-in и keep-alive назначены на один и тот же час, выполняются оба типа задач.
 func TestNextWakeSameInstantFiresAll(t *testing.T) {
 	s := New(Config{
-		CheckinHours:     []int{9, 22},
-		TravelHours:      []int{}, // 禁用旅行时点干扰（仅测签到+保活同整点）
-		ActivityHours:    []int{}, // 禁用活跃时点干扰
-		KeepaliveHours:   []int{22},
-		TravelDisabled:   true,
+		CheckinHours: []int{9, 22},
+		TravelHours: []int{}, // Отключить влияние travel-моментов (тест только чекина+Keep-alive совпадает с ровным часом)
+		ActivityHours: []int{}, // помеха от точки активности блокировки
+		KeepaliveHours: []int{22},
+		TravelDisabled: true,
 		ActivityDisabled: true,
 		BlackcatDisabled: true,
 	})
@@ -72,10 +72,10 @@ func TestNextWakeSameInstantFiresAll(t *testing.T) {
 		t.Errorf("next=%v want %v", at, want)
 	}
 	if !hasKind(kinds, taskCheckin) || !hasKind(kinds, taskKeepalive) {
-		t.Errorf("kinds=%v want checkin+keepalive（同一时刻两任务）", kinds)
+		t.Errorf("kinds=%v want checkin+keepalive（две задачи одновременно)", kinds)
 	}
 
-	// 22 点过后下一次是次日 09:00，且只含签到（旅行/活跃已禁用）。
+	// 22 После наступления времени следующий раз — на следующий день 09:00，и содержит только check-in (travel/активный уже отключен).
 	at, kinds = s.nextWake(time.Date(2026, 9, 11, 22, 30, 0, 0, time.Local))
 	if want := time.Date(2026, 9, 12, 9, 0, 0, 0, time.Local); !at.Equal(want) {
 		t.Errorf("next=%v want %v", at, want)
@@ -85,7 +85,7 @@ func TestNextWakeSameInstantFiresAll(t *testing.T) {
 	}
 }
 
-// TestNextWakeNothingScheduled 两类任务全空时返回零值，Run 只等退出信号。
+// TestNextWakeNothingScheduled При пустоте обоих типов задач вернуть нулевое значение,Run Ожидает только сигнал выхода.
 func TestNextWakeNothingScheduled(t *testing.T) {
 	s := &Scheduler{cfg: Config{}}
 	at, kinds := s.nextWake(time.Now())
@@ -94,42 +94,42 @@ func TestNextWakeNothingScheduled(t *testing.T) {
 	}
 }
 
-// TestNextWakeCheckinDisabled 显式禁用签到后，排程里不再有签到时点（保活照常）。
+// TestNextWakeCheckinDisabled После явного отключения чекина в расписании больше нет точек чекина (keep-alive как обычно).
 func TestNextWakeCheckinDisabled(t *testing.T) {
 	s := New(Config{CheckinDisabled: true, CheckinHours: []int{9, 21}, KeepaliveHours: []int{22},
 		TravelDisabled: true, ActivityDisabled: true})
 	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, time.Local))
 	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, time.Local); !at.Equal(want) {
-		t.Errorf("next=%v want %v（不应再有 21 点签到）", at, want)
+		t.Errorf("next=%v want %v（больше не должно быть 21 точечный чекин)", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskKeepalive {
 		t.Errorf("kinds=%v want [keepalive]", kinds)
 	}
 }
 
-// TestNextWakeKeepaliveDisabled 显式禁用保活后，排程里不再有保活时点（签到照常）。
+// TestNextWakeKeepaliveDisabled После явного отключения keep-alive в расписании больше нет точек keep-alive (отметка как обычно).
 func TestNextWakeKeepaliveDisabled(t *testing.T) {
 	s := New(Config{KeepaliveDisabled: true, CheckinHours: []int{9, 21}, KeepaliveHours: []int{22},
 		TravelDisabled: true, ActivityDisabled: true})
 	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, time.Local))
 	if want := time.Date(2026, 9, 11, 21, 0, 0, 0, time.Local); !at.Equal(want) {
-		t.Errorf("next=%v want %v（不应再有 22 点保活）", at, want)
+		t.Errorf("next=%v want %v（больше не должно быть 22 точечный keepalive)", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskCheckin {
 		t.Errorf("kinds=%v want [checkin]", kinds)
 	}
 }
 
-// TestNextWakeBothDisabledNothingScheduled 五类任务都显式禁用 → 无可唤醒时点。
+// TestNextWakeBothDisabledNothingScheduled Все пять типов задач явно отключены → Нет точек пробуждения.
 func TestNextWakeBothDisabledNothingScheduled(t *testing.T) {
 	s := New(Config{
-		CheckinDisabled:   true,
-		TravelDisabled:    true,
-		ActivityDisabled:  true,
+		CheckinDisabled: true,
+		TravelDisabled: true,
+		ActivityDisabled: true,
 		KeepaliveDisabled: true,
-		BlackcatDisabled:  true,
-		CheckinHours:      []int{9, 21},
-		KeepaliveHours:    []int{22},
+		BlackcatDisabled: true,
+		CheckinHours: []int{9, 21},
+		KeepaliveHours: []int{22},
 	})
 	at, kinds := s.nextWake(time.Now())
 	if !at.IsZero() || len(kinds) != 0 {
@@ -137,8 +137,8 @@ func TestNextWakeBothDisabledNothingScheduled(t *testing.T) {
 	}
 }
 
-// TestRunAllDisabledNoSpinNoCalls 四类任务全禁用：Run 不空转（只等退出信号），
-// 且不能触发任何上游请求。
+// TestRunAllDisabledNoSpinNoCalls все четыре типа задач отключены:Run Без холостого хода (только ожидание сигнала выхода),
+// И не должен вызывать никаких апстрим-запросов.
 func TestRunAllDisabledNoSpinNoCalls(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,33 +150,33 @@ func TestRunAllDisabledNoSpinNoCalls(t *testing.T) {
 	p := pool.New("")
 	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
 	up := &upstream.Client{
-		HTTP:          srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{
-		Pool:              p,
-		Upstream:          up,
-		CheckinDisabled:   true,
-		TravelDisabled:    true,
-		ActivityDisabled:  true,
+		Pool: p,
+		Upstream: up,
+		CheckinDisabled: true,
+		TravelDisabled: true,
+		ActivityDisabled: true,
 		KeepaliveDisabled: true,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	s.Run(ctx) // 阻塞到 ctx 取消为止（无时点可等，不构造 timer）
+	s.Run(ctx) // блокировка до ctx до отмены (нет момента для ожидания, не создавать timer）
 	elapsed := time.Since(start)
 
 	if calls.Load() != 0 {
-		t.Errorf("upstream calls=%d want 0（四类全禁用）", calls.Load())
+		t.Errorf("upstream calls=%d want 0（все четыре типа отключены)", calls.Load())
 	}
 	if elapsed < 200*time.Millisecond {
-		t.Errorf("Run returned after %v, before ctx done（不应提前返回）", elapsed)
+		t.Errorf("Run returned after %v, before ctx done（не должен возвращаться досрочно)", elapsed)
 	}
 	if elapsed > 2*time.Second {
-		t.Errorf("Run took %v（不应空转/忙等）", elapsed)
+		t.Errorf("Run took %v（Не должен простаивать/активное ожидание)", elapsed)
 	}
 }
 
@@ -189,12 +189,12 @@ func hasKind(kinds []taskKind, k taskKind) bool {
 	return false
 }
 
-// fakeUpstream 同时模拟 billing 与 refresh。
+// fakeUpstream Одновременно симулировать billing и refresh。
 type fakeUpstream struct {
-	checkinCalls   atomic.Int32
-	refreshCalls   atomic.Int32
+	checkinCalls atomic.Int32
+	refreshCalls atomic.Int32
 	resourceRemain int64
-	resourceEnd    string
+	resourceEnd string
 }
 
 func (f *fakeUpstream) server() *httptest.Server {
@@ -204,8 +204,8 @@ func (f *fakeUpstream) server() *httptest.Server {
 			f.checkinCalls.Add(1)
 			w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
 		case strings.HasSuffix(r.URL.Path, "/get-user-resource"):
-			// remain 需 <= size（取数钳 [0,size]：脏数据 remain>size 会被钳到 size
-			// ——上游真实数据恒一致，实测 Cycle{17,482,500}）。
+			// remain Требуется <= size（Захват данных [0,size]：грязные данные remain>size Будет зажато до size
+			// ——реальные данные апстрима всегда консистентны, фактически Cycle{17,482,500}）。
 			end := ""
 			if f.resourceEnd != "" {
 				end = `,"CycleEndTime":` + jsonString(f.resourceEnd)
@@ -239,17 +239,17 @@ func TestRunCheckinReenablesCoolingAccount(t *testing.T) {
 	p := pool.New("")
 	a := &auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999}
 	p.Add(a)
-	p.Cooldown("u1", pool.CoolHard, time.Hour, "余额不足")
+	p.Cooldown("u1", pool.CoolHard, time.Hour, "Недостаточно средств")
 
 	up := &upstream.Client{
-		HTTP:          srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{
-		Pool:           p,
-		Upstream:       up,
-		CheckinHours:   []int{9, 21},
+		Pool: p,
+		Upstream: up,
+		CheckinHours: []int{9, 21},
 		KeepaliveHours: []int{22},
 	})
 	s.RunCheckinNow()
@@ -275,8 +275,8 @@ func TestRunKeepaliveRefreshesTokens(t *testing.T) {
 	p.Add(a)
 
 	up := &upstream.Client{
-		HTTP:          srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{Pool: p, Upstream: up})
@@ -301,37 +301,37 @@ func TestRunKeepaliveSessionDeadDisables(t *testing.T) {
 	p.Add(a)
 
 	up := &upstream.Client{
-		HTTP:          srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{Pool: p, Upstream: up})
-	// P0-1：12153 连续 N 次才禁用。前 2 次刷新失败不应杀号（误判防护）。
+	// P0-1：12153 непрерывно N раз до отключения. До 2 раз неудач обновления не должны банить аккаунт (защита от ложных срабатываний).
 	s.RunKeepaliveNow()
 	if st, _ := p.Status("u1"); st.Disabled {
-		t.Fatalf("第 1 次 12153 不应禁用: %+v", st)
+		t.Fatalf("№ 1 Раз 12153 Не следует отключать: %+v", st)
 	}
 	s.RunKeepaliveNow()
 	if st, _ := p.Status("u1"); st.Disabled {
-		t.Fatalf("第 2 次 12153 不应禁用: %+v", st)
+		t.Fatalf("№ 2 Раз 12153 Не следует отключать: %+v", st)
 	}
-	// 第 3 次连续 12153 → 禁用。
+	// № 3 раз подряд 12153 → Отключено.
 	s.RunKeepaliveNow()
 	st, _ := p.Status("u1")
 	if !st.Disabled {
-		t.Errorf("第 3 次连续 12153 应禁用: %+v", st)
+		t.Errorf("№ 3 раз подряд 12153 следует отключить: %+v", st)
 	}
 	if st.DisabledReason != "12153 session dead" {
 		t.Errorf("disabled_reason=%q want 12153 session dead", st.DisabledReason)
 	}
 }
 
-// TestRunKeepaliveSessionDeadResetBySuccess 两次 12153 后刷新成功 → 计数清零，
-// 再来的 12153 从第 1 次重新计（不会因历史失败被继续追杀）。
+// TestRunKeepaliveSessionDeadResetBySuccess два раза 12153 после — обновление успешно → сброс счетчика,
+// Повторный 12153 с 1 раз — пересчёт заново (без преследования за исторические ошибки).
 func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 	var fails atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if fails.Add(1) == 3 { // 第 3 次（本次调度循环的第二轮）刷新成功
+		if fails.Add(1) == 3 { // № 3 раз (второй раунд текущего цикла диспетчеризации) обновление успешно
 			w.Write([]byte(`{"code":0,"data":{"accessToken":"new","expiresIn":3600}}`))
 			return
 		}
@@ -345,26 +345,26 @@ func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 	p.Add(a)
 
 	up := &upstream.Client{
-		HTTP:          srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{Pool: p, Upstream: up})
 	s.RunKeepaliveNow() // 12153 #1
 	s.RunKeepaliveNow() // 12153 #2
 	if st, _ := p.Status("u1"); st.Disabled {
-		t.Fatalf("precondition: 前 2 次不应禁用: %+v", st)
+		t.Fatalf("precondition: Перед 2 раз не следует отключать: %+v", st)
 	}
-	s.RunKeepaliveNow() // 刷新成功 → 清计数
-	// 接下来连续 2 次 12153：从新计数重新算，仍不应禁用（历史计数已清）。
-	s.RunKeepaliveNow() // 12153 #1（新计数）
-	s.RunKeepaliveNow() // 12153 #2（新计数）
+	s.RunKeepaliveNow() // Обновление успешно → сброс счетчика
+	// Далее подряд 2 Раз 12153：Пересчёт с нуля, всё равно не блокировать (история счётчиков очищена).
+	s.RunKeepaliveNow() // 12153 #1（новый счётчик)
+	s.RunKeepaliveNow() // 12153 #2（новый счётчик)
 	if st, _ := p.Status("u1"); st.Disabled {
-		t.Fatalf("刷新成功清计数后连续 2 次 12153 不应禁用: %+v", st)
+		t.Fatalf("после успешного сброса счётчика обновления подряд 2 Раз 12153 Не следует отключать: %+v", st)
 	}
-	s.RunKeepaliveNow() // 12153 #3（新计数）→ 禁用
+	s.RunKeepaliveNow() // 12153 #3（новый счётчик)→ Отключено
 	if st, _ := p.Status("u1"); !st.Disabled {
-		t.Fatalf("新计数第 3 次 12153 应禁用: %+v", st)
+		t.Fatalf("новый счетчик № 3 Раз 12153 следует отключить: %+v", st)
 	}
 }
 
@@ -378,19 +378,19 @@ func TestCheckinErrorDoesNotCrash(t *testing.T) {
 	p := pool.New("")
 	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
 	up := &upstream.Client{
-		HTTP:          srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
 	}
 	s := New(Config{Pool: p, Upstream: up})
-	// 不应 panic
+	// Не должен panic
 	s.RunCheckinNow()
 	s.RunKeepaliveNow()
 	_ = errors.New("unused")
 }
 
-// TestRunBalanceRefreshNowUpdatesCreditsAndRevives 只查余额（不签到）即可更新 credits
-// 并解冻余额恢复的冷却账号——面板手动刷新与后台周期任务共用该语义。
+// TestRunBalanceRefreshNowUpdatesCreditsAndRevives только запрос баланса (без check-in) для обновления credits
+// и разморозить аккаунты на кулдауне с восстановленным балансом — ручное обновление панели и фоновая периодическая задача используют одну семантику.
 func TestRunBalanceRefreshNowUpdatesCreditsAndRevives(t *testing.T) {
 	f := &fakeUpstream{resourceRemain: 777}
 	srv := f.server()
@@ -399,7 +399,7 @@ func TestRunBalanceRefreshNowUpdatesCreditsAndRevives(t *testing.T) {
 	p := pool.New("")
 	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
 	p.Add(&auth.Auth{UID: "u2", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
-	p.Cooldown("u1", pool.CoolHard, time.Hour, "余额不足")
+	p.Cooldown("u1", pool.CoolHard, time.Hour, "Недостаточно средств")
 	p.Disable("u2", "manual")
 
 	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
@@ -413,13 +413,13 @@ func TestRunBalanceRefreshNowUpdatesCreditsAndRevives(t *testing.T) {
 	if f.checkinCalls.Load() != 0 {
 		t.Errorf("balance refresh must not checkin, got %d calls", f.checkinCalls.Load())
 	}
-	// 禁用账号不参与：其 credits 保持 0（未被 UserResource 覆盖解冻）。
+	// Отключённые аккаунты не участвуют: их credits Сохранить 0（Не был UserResource перезапись разморозки).
 	if st2, _ := p.Status("u2"); !st2.Disabled {
 		t.Errorf("u2 must stay disabled")
 	}
 }
 
-// TestNextWakeGrowthSlot growth 排程进候选 + 禁用退场（每日自动执行成长任务队列）。
+// TestNextWakeGrowthSlot growth планирование в кандидаты + Отключить выход (ежедневное авто-выполнение очереди заданий роста).
 func TestNextWakeGrowthSlot(t *testing.T) {
 	s := New(Config{GrowthHours: []int{1}})
 	at, kinds := s.nextWake(time.Date(2026, 9, 27, 0, 10, 0, 0, time.Local))
@@ -430,14 +430,14 @@ func TestNextWakeGrowthSlot(t *testing.T) {
 		}
 	}
 	if !hasGrowth || at.Hour() != 1 || at.Day() != 27 {
-		t.Fatalf("growth 槽位: at=%v kinds=%v（期望 09-27 01:00 含 taskGrowth）", at, kinds)
+		t.Fatalf("growth Слот: at=%v kinds=%v（Ожидается 09-27 01:00 Содержит taskGrowth）", at, kinds)
 	}
-	// 禁用后不进候选（其余 kind 为空 → nextWake 零值返回）
+	// После отключения не попадает в кандидаты (остальные kind пусто → nextWake возврат нулевого значения)
 	s2 := New(Config{GrowthHours: []int{1}, GrowthDisabled: true})
 	_, kinds2 := s2.nextWake(time.Date(2026, 9, 27, 0, 10, 0, 0, time.Local))
 	for _, k := range kinds2 {
 		if k == taskGrowth {
-			t.Fatal("禁用后 growth 仍在候选")
+			t.Fatal("После отключения growth Все еще в кандидатах")
 		}
 	}
 }

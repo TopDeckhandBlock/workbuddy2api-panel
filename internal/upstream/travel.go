@@ -1,5 +1,5 @@
-// travel.go growth 域「猫猫旅行」接口：状态查询 / 派出 / 领奖 / 领养 / 协议。
-// 全部走 chatBase（copilot.tencent.com，不带 /v2 前缀）+ BillingHeaders，信封同 doJSON。
+// travel.go growth домен интерфейса "Кошачье путешествие»: опрос статуса / Отправить / Получение награды / адопция / Протокол.
+// Всё идёт через chatBase（copilot.tencent.com，без /v2 префикс)+ BillingHeaders，конверт аналогично doJSON。
 package upstream
 
 import (
@@ -13,36 +13,36 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// growth 域路径（实测）。
+// growth путь домена (факт. замер).
 const (
-	travelStatusPath   = "/activity/growth/buddy/travel/status"
-	travelDepartPath   = "/activity/growth/buddy/travel/depart"
-	travelClaimPath    = "/activity/growth/buddy/travel/claim"
-	buddyInfoPath      = "/activity/growth/buddy/info"
-	buddyFirstPath     = "/activity/growth/buddy/first"
+	travelStatusPath = "/activity/growth/buddy/travel/status"
+	travelDepartPath = "/activity/growth/buddy/travel/depart"
+	travelClaimPath = "/activity/growth/buddy/travel/claim"
+	buddyInfoPath = "/activity/growth/buddy/info"
+	buddyFirstPath = "/activity/growth/buddy/first"
 	buddyAgreementPath = "/activity/growth/buddy/agreement"
-	streakPath         = "/activity/growth/streak"
+	streakPath = "/activity/growth/streak"
 )
 
-// buddyTaskIncompleteMarker 领养门槛未达标的业务错误关键词（HTTP 400 时出现）。
+// buddyTaskIncompleteMarker Ключевые слова бизнес-ошибки "не достигнут порог принятия" (HTTP 400 появляется).
 const buddyTaskIncompleteMarker = "first_buddy task not completed yet"
 
-// Buddy 账号当前猫档案；nil（data.buddy 为 null）表示无猫。
+// Buddy текущий профиль кота аккаунта;nil（data.buddy для null）означает отсутствие кота.
 type Buddy struct {
-	ID   int64  `json:"id"`
+	ID int64 `json:"id"`
 	Name string `json:"name"`
 }
 
-// TravelState 猫猫旅行状态。
+// TravelState Статус путешествия котика.
 type TravelState struct {
-	State             string `json:"state"`               // idle / traveling / arrived
-	DailyLimitReached bool   `json:"daily_limit_reached"` // 今日已派出过（自然日 00:00 CST 重置）
-	RecordID          int64  `json:"record_id"`           // 在途/到站记录 id，claim 必带
-	RewardCredit      int64  `json:"reward_credit"`       // 到站可领奖励积分
+	State string `json:"state"` // idle / traveling / arrived
+	DailyLimitReached bool `json:"daily_limit_reached"` // сегодня уже выдавался (календарные сутки 00:00 CST сброс)
+	RecordID int64 `json:"record_id"` // в пути/запись о прибытии id，claim обязательное
+	RewardCredit int64 `json:"reward_credit"` // по прибытии можно получить бонусные баллы
 }
 
-// growthJSON 发 growth 域请求并解信封；body 为 nil 时不带请求体。
-// 错误语义与 doJSON 一致：HTTP 非 2xx / 业务 code != 0 → *Error。
+// growthJSON Отправка growth доменный запрос и распаковка конверта;body для nil без тела запроса.
+// семантика ошибки и doJSON совпадает:HTTP не 2xx / Бизнес code != 0 → *Error。
 func (c *Client) growthJSON(a *auth.Auth, method, path string, body any) (json.RawMessage, error) {
 	var rdr io.Reader
 	if body != nil {
@@ -60,7 +60,7 @@ func (c *Client) growthJSON(a *auth.Auth, method, path string, body any) (json.R
 	return c.doJSON(req)
 }
 
-// TravelStatus 查询猫猫旅行状态。
+// TravelStatus Запрос статуса путешествия котика.
 func (c *Client) TravelStatus(a *auth.Auth) (*TravelState, error) {
 	data, err := c.growthJSON(a, http.MethodGet, travelStatusPath, nil)
 	if err != nil {
@@ -73,13 +73,13 @@ func (c *Client) TravelStatus(a *auth.Auth) (*TravelState, error) {
 	return &st, nil
 }
 
-// TravelDepart 派出猫旅行；locationID 实测 1~4（收益/时长区间相同）。
+// TravelDepart Отправить кота в путешествие;locationID На практике 1~4（Выгода/интервал длительности тот же).
 func (c *Client) TravelDepart(a *auth.Auth, locationID int) error {
 	_, err := c.growthJSON(a, http.MethodPost, travelDepartPath, map[string]any{"location_id": locationID})
 	return err
 }
 
-// TravelClaim 领取到站奖励，返回 reward_credit。
+// TravelClaim получить награду за прибытие, вернуть reward_credit。
 func (c *Client) TravelClaim(a *auth.Auth, recordID int64) (int64, error) {
 	data, err := c.growthJSON(a, http.MethodPost, travelClaimPath, map[string]any{"record_id": recordID})
 	if err != nil {
@@ -89,13 +89,13 @@ func (c *Client) TravelClaim(a *auth.Auth, recordID int64) (int64, error) {
 		RewardCredit int64 `json:"reward_credit"`
 	}
 	if len(data) > 0 {
-		// 奖励字段缺失不视为失败：调用方按 0 记日志即可。
+		// Отсутствие поля награды не считается ошибкой: вызывающая сторона по 0 достаточно залогировать.
 		_ = json.Unmarshal(data, &resp)
 	}
 	return resp.RewardCredit, nil
 }
 
-// BuddyInfo 查询当前猫档案；返回 (nil, nil) 表示无猫（data.buddy 为 null）。
+// BuddyInfo запрос текущего профиля кота; возврат (nil, nil) означает отсутствие кота (data.buddy для null）。
 func (c *Client) BuddyInfo(a *auth.Auth) (*Buddy, error) {
 	data, err := c.growthJSON(a, http.MethodGet, buddyInfoPath, nil)
 	if err != nil {
@@ -107,7 +107,7 @@ func (c *Client) BuddyInfo(a *auth.Auth) (*Buddy, error) {
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}
-	// null / 缺字段 / 空对象都按无猫处理。
+	// null / Отсутствует поле / пустые объекты обрабатывать как отсутствие cat.
 	trimmed := strings.TrimSpace(string(resp.Buddy))
 	if trimmed == "" || trimmed == "null" {
 		return nil, nil
@@ -119,23 +119,23 @@ func (c *Client) BuddyInfo(a *auth.Auth) (*Buddy, error) {
 	return &b, nil
 }
 
-// BuddyFirst 领养第一只猫。无猫且已过 conversation 门槛时送 300 分。
-// 门槛未达标返回 HTTP 400（见 IsBuddyTaskIncomplete），属预期行为，调用方静默跳过。
+// BuddyFirst Приютить первого кота. Нет кота и уже прошло conversation При достижении порога отправить 300 баллов.
+// При недостижении порога вернуть HTTP 400（См. IsBuddyTaskIncomplete），Ожидаемое поведение, вызывающая сторона тихо пропускает.
 func (c *Client) BuddyFirst(a *auth.Auth) error {
 	_, err := c.growthJSON(a, http.MethodPost, buddyFirstPath, map[string]any{})
 	return err
 }
 
-// BuddyAgreement 同意协议（幂等，重复调用无副作用）。
+// BuddyAgreement Принятие соглашения (идемпотентно, повторный вызов без побочных эффектов).
 func (c *Client) BuddyAgreement(a *auth.Auth) error {
 	_, err := c.growthJSON(a, http.MethodPost, buddyAgreementPath, map[string]any{"agree": true})
 	return err
 }
 
-// GrowthStreak 查询连登天数（只读 oracle）。响应 `data.streak.days`（probe_active.py
-// 实测口径：`(s.get("data", {}).get("streak", {}) or {}).get("days")`）。
-// GET 失败（HTTP 非 2xx / 业务 code != 0）返回 *Error；缺 streak/days 字段返回 0
-// （days==0 即活跃自检的「上报 200 但静默丢弃」告警信号）。
+// GrowthStreak Запрос дней непрерывного входа (только чтение oracle）。Ответ `data.streak.days`（probe_active.py
+// фактическая методика измерения:`(s.get("data«, {}).get("streak", {}) or {}).get("days")`）。
+// GET сбой (HTTP не 2xx / Бизнес code != 0）вернуть *Error；нехватка streak/days поле возвращает 0
+// （days==0 т.е. активная самопроверка "отчет 200 но сигнал тревоги "тихо отбрасывается»).
 func (c *Client) GrowthStreak(a *auth.Auth) (int, error) {
 	data, err := c.growthJSON(a, http.MethodGet, streakPath, nil)
 	if err != nil {
@@ -152,8 +152,8 @@ func (c *Client) GrowthStreak(a *auth.Auth) (int, error) {
 	return resp.Streak.Days, nil
 }
 
-// IsBuddyTaskIncomplete 判定「领养门槛未达标」：HTTP 400 + first_buddy 关键词。
-// 该错误当日不应重试（避免对上游重试轰炸）。
+// IsBuddyTaskIncomplete Проверка "порог принятия не достигнут":HTTP 400 + first_buddy ключевые слова.
+// Эту ошибку не ретраить в течение дня (избежать шторма ретраев на апстрим).
 func IsBuddyTaskIncomplete(err error) bool {
 	if err == nil {
 		return false

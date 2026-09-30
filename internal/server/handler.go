@@ -1,4 +1,4 @@
-// Package server 暴露 OpenAI 兼容 HTTP 接口，内部驱动 pool 挑号 + upstream 转发。
+// Package server экспонировать OpenAI совместимость HTTP интерфейс, внутренний драйвер pool выбор номера + upstream пересылка.
 package server
 
 import (
@@ -25,67 +25,67 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
 
-// Config handler 依赖。
+// Config handler зависимость.
 type Config struct {
-	Pool      *pool.Pool
-	Upstream  *upstream.Client
-	APIKey    string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
-	MaxRotate int    // 单请求最多换号次数，默认 3
-	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
+	Pool *pool.Pool
+	Upstream *upstream.Client
+	APIKey string // пустой = без аутентификации (статическое значение; с Live При одновременном указании Live приоритет)
+	MaxRotate int // Макс. число смен номера на запрос, по умолчанию 3
+	// Session Маршрутизатор sticky-сессий (опционально;nil = Отключить sticky, чисто Pick ротация).
 	Session *session.Router
-	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
+	// StickyCount Вернуть текущее кол-во привязок sticky-сессий (для /status）；nil отчет по времени 0。
 	StickyCount func() int
-	// RedisMode 观测字段（"upstash" / "noop"），供 /status 透出。
-	RedisMode    string
-	SoftCooldown time.Duration // 429/限流文案软冷却基数，默认 600s（连续触发指数退避，封顶 soft_rate_max）
-	RefreshSkew  time.Duration // token 提前刷新窗口，默认 10m
+	// RedisMode Поле наблюдения ("upstash« / "noop"），Подача /status Проброс.
+	RedisMode string
+	SoftCooldown time.Duration // 429/База мягкого кулдауна для текста лимита, по умолчанию 600s（ПриНепрерывный срабатывании — экспоненциальный бэкофф, с потолком soft_rate_max）
+	RefreshSkew time.Duration // token Досрочное обновление окна, по умолчанию 10m
 
-	// Panel 管理面板 handler（可选；nil = 不挂载）。挂载在 /panel/ 前缀下，
-	// 面板自带 Bearer 鉴权（同一 api_key）与内嵌静态资源，主路由只做转发。
+	// Panel Панель управления handler（Опционально;nil = не монтировать). Смонтировано в /panel/ Под префиксом,
+	// встроено в панель Bearer Аутентификация (тот же api_key）И встроенные статические ресурсы, главный роут только форвардит.
 	Panel http.Handler
 
-	// Live 运行期可变配置（面板在线改 api_key / soft_rate / 脱敏开关时立即生效）。
-	// nil 时回退静态字段（测试与裸用场景）。
+	// Live изменяемая в рантайме конфигурация (изменение онлайн через панель api_key / soft_rate / вступает в силу сразу при переключении десенситизации).
+	// nil откат к статическим полям (сценарии теста и bare usage).
 	Live *livecfg.Holder
 
-	// PromptMode "custom"（网关用自有提示词替换 system）/ "passthrough"（透传）。
+	// PromptMode "custom«（Шлюз заменяет собственным промптом system）/ "passthrough"（сквозная передача).
 	PromptMode string
-	// PromptText custom 模式下注入的系统提示词文本（来自 config.PromptText）。
+	// PromptText custom Текст системного промпта, инжектируемый в режиме (из config.PromptText）。
 	PromptText string
 
-	// GlobalEnabled global realm 路由开关（config global.enabled，缺省 true）。
-	// handler 侧第三道闸（与 main 注入 auth 开关、upstream.GlobalEnabled 呼应）：
-	// false（显式逃生门）时即便 auth realm=global 也不提供 global: 模型名
-	// （modelList 不列 global 名单）。
+	// GlobalEnabled global realm Переключатель маршрутизации (config global.enabled，по умолчанию true）。
+	// handler третий шлюз на стороне (с main инжект auth переключатель,upstream.GlobalEnabled соответствие):
+	// false（явный escape-hatch) даже если auth realm=global также не предоставляет global: Имя модели
+	// （modelList Не перечислять global список).
 	GlobalEnabled bool
 
-	// Usage 逐请求用量记录器（可选；nil = 不记录）。
-	// 在 recordAttempt 这一唯一汇聚点调用，因此流式/非流式、成功/失败都会计入，
-	// 且与 pool 的每账号累计器同源，两条口径不会漂移。
+	// Usage Рекордер расхода на запрос (опционально;nil = не логировать).
+	// В recordAttempt Вызов через эту единственную точку агрегации, поэтому потоковый/непотоковый, успешный/Любой сбой будет учтен,
+	// и с pool накопители на аккаунт из одного источника, расхождения метрик нет.
 	Usage *usage.Recorder
 
-	// RequestLog 请求指标与脱敏 JSONL 归档（可选；nil = 不记录）。
+	// RequestLog метрики запросов и десенсибилизация JSONL архивация (опционально;nil = не логировать).
 	RequestLog *reqlog.Recorder
 
-	// RecordClientInfo 是否在请求日志里记录调用来源（客户端 IP / User-Agent）。
-	// 来自 logging.request_client_info（缺省 true）；关闭时 reqlog 事件的来源字段
-	// 保持为空，归档与面板都不出现来源信息。
+	// RecordClientInfo Логировать ли источник вызова в логе запросов (клиент IP / User-Agent）。
+	// из logging.request_client_info（по умолчанию true）；При закрытии reqlog поле источника события
+	// остаётся пустым, в архиве и на панели источник не отображается.
 	RecordClientInfo bool
 }
 
-// loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
+// loadLive Вернуть снапшот текущего рантайма;Live для nil синтез статическими полями.
 func (h *Handler) loadLive() livecfg.Snapshot {
 	if h.cfg.Live != nil {
 		return h.cfg.Live.Load()
 	}
 	return livecfg.Snapshot{
-		APIKey:           h.cfg.APIKey,
-		SoftCooldown:     h.cfg.SoftCooldown,
+		APIKey: h.cfg.APIKey,
+		SoftCooldown: h.cfg.SoftCooldown,
 		RecordClientInfo: h.cfg.RecordClientInfo,
 	}
 }
 
-// softCooldown 返回当前生效的软冷却基数（热改优先，<=0 回退默认）。
+// softCooldown Вернуть текущий базовый интервал мягкого кулдауна (приоритет hot-fix,<=0 Откат к дефолту).
 func (h *Handler) softCooldown() time.Duration {
 	if d := h.loadLive().SoftCooldown; d > 0 {
 		return d
@@ -96,40 +96,40 @@ func (h *Handler) softCooldown() time.Duration {
 	return 600 * time.Second
 }
 
-// notFoundCooldown 上游 404 的固定短冷却时长。
-// 与 SoftCooldown 分流的原因：404 是上游**偶发**路径缺失，不是"本账号在限流"，
-// 若共用 soft_rate（600s 起 + 指数升级），一次偶发 404 会把好账号罚 10 分钟并逐次加倍。
-// 故固定 60s 防雪崩即可，不随 soft_rate 配置、也不参与软退避指数。
+// notFoundCooldown апстрим 404 фиксированная короткая длительность кулдауна.
+// и SoftCooldown Причина разделения трафика:404 это upstream**спорадически**Путь отсутствует, это не"данный аккаунт в rate-limit"，
+// При совместном использовании soft_rate（600s Запуск + экспоненциальное повышение), единичный сбой 404 заштрафует хорошие аккаунты 10 минут с последовательным удвоением.
+// поэтому фиксировано 60s достаточно защиты от лавины, не зависит от soft_rate конфиг, и не участвует в индексе мягкого бэкоффа.
 const notFoundCooldown = 60 * time.Second
 
-// ServiceName 网关身份标识。经 /healthz 响应体 service 字段与 X-Service 头同时透出：
-// 宿主（如 workbuddy-switch 托管网关子进程）探测同端口的旧服务/其他服务时，对方即使
-// 返回 2xx 也不带本标识，宿主据此可识别"假成功"。
+// ServiceName Идентификатор шлюза. Через /healthz тело ответа service Поле и X-Service Заголовок также пробрасывается:
+// Хост (напр. workbuddy-switch управляемый шлюз-субпроцесс) пробует старый сервис на том же порту/При других сервисах даже если другая сторона
+// вернуть 2xx также без этого маркера, хост определяет по этому"Ложный успех"。
 const ServiceName = "workbuddy2api"
 
-// Handler 主路由。
+// Handler главный маршрут.
 type Handler struct {
-	cfg     Config
-	mux     *http.ServeMux
+	cfg Config
+	mux *http.ServeMux
 	degrade degradeGate
-	// wafIP WAF IP 级拦截状态机（fail-fast，wafip.go）：短窗多号 WAF 403 →
-	// 激活期轮转遇 WAF 403 直接终止（不放大请求量）。进程内状态、重启清零。
+	// wafIP WAF IP уровневый стейт-машина блокировки (fail-fast，wafip.go）：Короткое окно, много номеров WAF 403 →
+	// ротация в период активации при WAF 403 Немедленное завершение (без увеличения объема запросов). Состояние внутри процесса, сбрасывается при перезапуске.
 	wafIP wafIPGate
 }
 
-// NewHandler 构建 handler。
+// NewHandler Сборка handler。
 func NewHandler(cfg Config) *Handler {
 	if cfg.MaxRotate <= 0 {
 		cfg.MaxRotate = 3
 	}
 	if cfg.SoftCooldown <= 0 {
-		cfg.SoftCooldown = 600 * time.Second // 软限流基数（连续触发按指数退避放大）
+		cfg.SoftCooldown = 600 * time.Second // база мягкого лимита (при непрерывном срабатывании экспоненциальный бэкофф)
 	}
 	if cfg.RefreshSkew <= 0 {
 		cfg.RefreshSkew = 10 * time.Minute
 	}
 	if cfg.PromptMode == "" {
-		cfg.PromptMode = "custom" // 缺省 custom：网关自有提示词
+		cfg.PromptMode = "custom" // по умолчанию custom：Собственный промпт шлюза
 	}
 	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
@@ -137,7 +137,7 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
 	if cfg.Panel != nil {
-		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
+		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ От ServeMux Авто-редирект
 	}
 	return h
 }
@@ -177,24 +177,24 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
 	total, healthy, _, _, _ := h.cfg.Pool.CountsDetailed()
-	// 用 ServableNow 判定：healthy>0 但全占满在途时 chat 会 503，探活必须同口径，
-	// 否则负载均衡器会把流量持续打进无法受理的实例。
+	// использовать ServableNow Критерий:healthy>0 но при полном заполнении in-flight chat Будет 503，Health-check должен быть по той же методике,
+	// Иначе балансировщик продолжит слать трафик на неспособные обслуживать инстансы.
 	status := http.StatusOK
 	if !h.cfg.Pool.ServableNow() {
 		status = http.StatusServiceUnavailable
 	}
-	// realm_servable 域可服务维度：不改判活语义（存在性探活保持不变），
-	// 只新增 CN/global 各自可达性供双域部署运维观察（任一域不可用单独告警）。
+	// realm_servable Измерение обслуживаемости домена: не менять семантику health-check (проверка существования без изменений),
+	// Только добавление CN/global Доступность каждого домена для наблюдения за двухдоменным развёртыванием (отдельный алерт при недоступности любого домена).
 	realmServable := map[string]bool{
-		"cn":     h.cfg.Pool.ServableForRealm("cn"),
+		"cn": h.cfg.Pool.ServableForRealm("cn"),
 		"global": h.cfg.Pool.ServableForRealm("global"),
 	}
-	// 恒无鉴权（负载均衡/编排探活只需 2xx/503 语义），身份靠 service 字段 + X-Service 头双保险。
+	// Всегда без аутентификации (балансировщик/для health-check оркестрации достаточно 2xx/503 семантика), идентификация по service Поле + X-Service Двойная страховка заголовком.
 	w.Header().Set("X-Service", ServiceName)
 	writeJSON(w, status, map[string]any{
-		"healthy":        healthy,
-		"total":          total,
-		"service":        ServiceName,
+		"healthy": healthy,
+		"total": total,
+		"service": ServiceName,
 		"realm_servable": realmServable,
 	})
 }
@@ -209,76 +209,76 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	if redisMode == "" {
 		redisMode = "noop"
 	}
-	// cost_explore 探索台账（issue #136 §5 可观测性）：累计探索事件数 + 各
-	// (域, 模型) 的最近探索时刻（键 "realm|model"）。与 accounts[].model_costs
-	// 行对照即可读出「探索→毕业」全链路（单一事实来源，不做双表示）。零回归只增键。
+	// cost_explore Журнал исследования (issue #136 §5 наблюдаемость): накопленное число событий исследования + каждый
+	// (Домен, Модель) последнее время исследования (ключ "realm|model"）。и accounts[].model_costs
+	// Сопоставление строк показывает "Исследование→выпуск» — сквозной тракт (единый источник истины, без двойного представления). Без регрессий, только добавление ключей.
 	exploreEvents, exploreLast := h.cfg.Pool.CostExploreStatus()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts":       h.cfg.Pool.List(),
-		"total":          total,
-		"healthy":        healthy,
-		"cooling":        cooling,
-		"disabled":       disabled,
+		"accounts": h.cfg.Pool.List(),
+		"total": total,
+		"healthy": healthy,
+		"cooling": cooling,
+		"disabled": disabled,
 		"in_flight_full": inFlightFull,
-		// realm_totals 按域分组的计数汇总（双 realm 并存时运维一眼看到各域可用性）：
-		// 只新增字段，既有 total/healthy/cooling/disabled/in_flight_full 汇总键不变（零回归）。
+		// realm_totals Сводка счетчиков с группировкой по доменам (двойн. realm при сосуществовании эксплуатация сразу видит доступность каждого домена):
+		// Только новые поля, существующие total/healthy/cooling/disabled/in_flight_full Ключ агрегации неизменен (нулевая регрессия).
 		"realm_totals": map[string]map[string]int{
-			"cn":     countsMapFrom(h.cfg.Pool.CountsDetailedForRealm("cn")),
+			"cn": countsMapFrom(h.cfg.Pool.CountsDetailedForRealm("cn")),
 			"global": countsMapFrom(h.cfg.Pool.CountsDetailedForRealm("global")),
 		},
 		"sticky_sessions": sticky,
-		"redis_mode":      redisMode,
-		// credit_floor 生效的积分保底值（0 = 关闭）。与 accounts[].credits +
-		// model_costs 对照即可判定「某号为何对某模型不出票」。零值也显式写出
-		// （运维口径：缺失会让人误以为没记录）。
+		"redis_mode": redisMode,
+		// credit_floor Действующее минимальное гарантированное значение баллов (0 = закрыто). И accounts[].credits +
+		// model_costs Сверкой можно определить "почему аккаунт не выдаёт билет на модель». Нулевые значения тоже пишутся явно
+		// （С точки зрения эксплуатации: отсутствие создаёт впечатление отсутствия записи).
 		"credit_floor": h.cfg.Pool.CreditFloor(),
-		// cost_explore 事件与 per-model 时间戳（时间值由 encoding/json 写 RFC3339）。
+		// cost_explore события и per-model таймстемп (значение времени из encoding/json Запись RFC3339）。
 		"cost_explore": map[string]any{
 			"events_total": exploreEvents,
-			"per_model":    exploreLast,
+			"per_model": exploreLast,
 		},
 	})
 }
 
-// countsMapFrom 把 CountsDetailed 五元组打包成 /status 的域分组建模。
+// countsMapFrom взять CountsDetailed упаковать 5-tuple в /status моделирование группировки по доменам.
 func countsMapFrom(total, healthy, cooling, disabled, inFlightFull int) map[string]int {
 	return map[string]int{
-		"total":          total,
-		"healthy":        healthy,
-		"cooling":        cooling,
-		"disabled":       disabled,
+		"total": total,
+		"healthy": healthy,
+		"cooling": cooling,
+		"disabled": disabled,
 		"in_flight_full": inFlightFull,
 	}
 }
 
-// dynamicModelsCache 动态模型缓存。
+// dynamicModelsCache динамический кэш моделей.
 var dynamicModelsCache struct {
 	sync.RWMutex
-	ids      []upstream.ModelInfo
-	fetched  time.Time // 最近一次成功拉取时间
-	lastFail time.Time // 最近一次拉取失败时间（负缓存）
+	ids []upstream.ModelInfo
+	fetched time.Time // время последнего успешного pull
+	lastFail time.Time // Время последней неудачной выборки (негативный кэш)
 }
 
 const (
-	// dynamicModelsTTL 模型目录缓存时长。曾是 1h；缩到 10min 对齐「面板实时、
-	// API 缓存」的漂移痛点（PR #38 报告）：目录新增模型时面板立即可见，公开
-	// /v1/models 最多滞后一个 TTL。再短就不值得——每次失效都是 2 次上游探测。
-	dynamicModelsTTL        = 10 * time.Minute
+	// dynamicModelsTTL Время кэширования каталога моделей. Ранее было 1h；Сжать до 10min синхронизация "панель в реалтайме,
+	// API кэша» дрейф (PR #38 отчет): при добавлении модели в каталог панель сразу видима, публично
+	// /v1/models Отставание максимум на один TTL。короче уже нецелесообразно — каждый промах это 2 проверок апстрима.
+	dynamicModelsTTL = 10 * time.Minute
 	modelsFetchFailCooldown = 5 * time.Minute
 )
 
-// models 返回模型列表：纯动态（缓存 10min），失败/无号返回空列表（无静态兜底——
-// 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型）。
+// models Возврат списка моделей: чисто динамический (кэш 10min），ошибка/Без аккаунтов — пустой список (без статического фолбэка —
+// не удалось вытянуть каталог — значит upstream недоступен, фейковый список заставит клиента выбрать 11102 модели).
 func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   h.modelList(),
+		"data": h.modelList(),
 	})
 }
 
-// fmtCreditsPrefix 从上游 credits 原文提取倍率并格式化为 "[x0.05 credit]"。
-// 上游格式不统一："x0.05 credits" / "x0.29" / "x0.00 credits" 等，
-// 统一提取 x数字 部分，去 "credits" 后缀。
+// fmtCreditsPrefix Из апстрима credits Извлечь множитель из оригинала и отформатировать как "[x0.05 credit]"。
+// Форматы upstream не унифицированы:"x0.05 credits« / «x0.29« / »x0.00 credits" и т.д.,
+// Единое извлечение xЧисло Часть, перейти "credits" суффикс.
 func fmtCreditsPrefix(raw string) string {
 	s := strings.TrimSpace(raw)
 	s = strings.TrimSuffix(s, "credits")
@@ -289,27 +289,27 @@ func fmtCreditsPrefix(raw string) string {
 	return "[" + s + " credit]"
 }
 
-// applyModelInfoFields 把上游模型对象全字段（ModelInfo）按「空值省略」写出规则
-// 合入 /v1/models 条目：name/description/credits/tags/vendor/能力旗标/
-// max_allowed_size/reasoning_effort/reasoning_summary。CN 动态分支与 global
-// 探测命中分支共用（两域模型对象同构），保证输出字段集一致。
-// 不覆盖 id/object/created/owned_by 及调用方先前写好的基础字段；上游未下发的
-// 字段（零值）整体省略——不编造。
+// applyModelInfoFields все поля объекта upstream-модели (ModelInfo）Записать правило по принципу "пропускать пустые значения»
+// Слияние /v1/models Запись:name/description/credits/tags/vendor/флаг возможности/
+// max_allowed_size/reasoning_effort/reasoning_summary。CN динамическая ветка и global
+// Общая ветка попадания детекции (объекты моделей двух доменов изоморфны), гарантирует единый набор выходных полей.
+// Без перекрытия id/object/created/owned_by и базовые поля, заранее заданные вызывающей стороной; не выданные апстримом
+// Поле (нулевое значение) полностью опускается — не выдумывать.
 func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[string]any {
 	if mi.Name != "" {
 		entry["name"] = mi.Name
 	}
 	if mi.Description != "" {
-		// 积分倍率前缀：从 "x0.05 credits" / "x0.29" 等格式提取纯数字，
-		// 统一为 "[x0.05 credit]" 前缀拼入 description，方便下游面板直接展示。
+		// префикс множителя очков: из "x0.05 credits« / "x0.29« и т.п. форматы — извлечь только цифры,
+		// Унифицировано в "[x0.05 credit]« Префикс подставляется description，Для прямого отображения на downstream-панели.
 		if mi.Credits != "" {
 			entry["description"] = fmtCreditsPrefix(mi.Credits) + " " + mi.Description
 		} else {
-			entry["description"] = mi.Description // descriptionZh 中文描述
+			entry["description"] = mi.Description // descriptionZh Описание на китайском
 		}
 	}
 	if mi.Credits != "" {
-		entry["credits"] = mi.Credits // 积分倍率原文（如 "x0.05"），仅展示
+		entry["credits"] = mi.Credits // исходный текст множителя баллов (напр. "x0.05"),Только отображение
 	}
 	if len(mi.Tags) > 0 {
 		entry["tags"] = mi.Tags
@@ -321,7 +321,7 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 		entry["is_default"] = true
 	}
 	if mi.SupportsImages {
-		entry["supports_images"] = true // 多模态能力透出
+		entry["supports_images"] = true // экспонирование мультимодальных возможностей
 	}
 	if mi.SupportsReasoning {
 		entry["supports_reasoning"] = true
@@ -347,32 +347,32 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 	return entry
 }
 
-// modelList 模型列表：CN 模型输出统一加 "cn:" 前缀（gateway 路由协议，与 resolveModel
-// 对称）；global.enabled=true 时追加 global: 前缀的国际版名单。
-// 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
+// modelList Список моделей:CN К выводу модели единообразно добавляется "cn:" Префикс (gateway Протокол маршрутизации, и resolveModel
+// симметрично);global.enabled=true добавить при global: список intl-версии с префиксом.
+// чисто динамический: сбой динамической загрузки/Без номера → Для этого домена пустой список, без статического фолбэка.
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
 	for _, mi := range h.fetchDynamicModels() {
 		entry := map[string]any{
-			"id":       "cn:" + mi.ID,
-			"object":   "model",
-			"created":  1753600000,
+			"id": "cn:" + mi.ID,
+			"object": "model",
+			"created": 1753600000,
 			"owned_by": "workbuddy",
 		}
-		// context_length / max_output_tokens 四级查找（upstream.model_catalog）：
-		// 上游动态值（maxInputTokens/maxOutputTokens）权威 → 静态种子表 →
-		// model.json 本地缓存 → models.dev 按需拉取（异步不阻塞本次响应，拉到后
-		// 写 model.json 供下次命中）→ 1M 兜底 / max_output_tokens 省略。
-		// 上游零值不再透出假 131072（误导 Codex/ZCode 等按 context_length 提前
-		// 截断、白白丢上下文）。
+		// context_length / max_output_tokens четырехуровневый поиск (upstream.model_catalog）：
+		// динамическое значение upstream (maxInputTokens/maxOutputTokens）авторитетный → статическая таблица seed'ов →
+		// model.json Локальный кэш → models.dev Подгрузка по требованию (асинхронно, не блокирует текущий ответ, после получения
+		// Запись model.json для следующего попадания)→ 1M Фолбэк / max_output_tokens Пропущено.
+		// Нулевое значение апстрима больше не прокидывается как фиктивное 131072（Вводит в заблуждение Codex/ZCode и т.д. по context_length Заранее
+		// обрезка, напрасная потеря контекста).
 		entry["context_length"] = upstream.ContextWindowListingV4(mi.ID, mi.ContextWindow, h.cfg.Upstream.HTTP)
 		if mo, ok := upstream.MaxOutputTokensListingV4(mi.ID, mi.MaxTokens, h.cfg.Upstream.HTTP); ok {
 			entry["max_output_tokens"] = mo
 		}
-		// 上游模型对象全字段透出（name/描述/标签/倍率/能力旗标等，空值省略）。
+		// Все поля объекта модели апстрима пробрасываются (name/описание/Тег/Множитель/флаги возможностей и т.п., пустые значения опускаются).
 		entry = applyModelInfoFields(entry, mi)
-		// effort 能力透出——远端 supportedEfforts 权威，缺失落到 CN 静态兜底表
-		// （客户端可发现档位，不再盲传）。无档位 → 省略字段。
+		// effort экспонирование возможности — удаленно supportedEfforts авторитетен, при отсутствии — fallback на CN статическая fallback-таблица
+		// （клиент может обнаружить тариф, без слепой передачи). Без тарифа → Пропустить поле.
 		if efforts, def := upstream.EffortListing("cn", mi.ID, mi.Efforts, mi.DefaultEffort); efforts != nil {
 			entry["reasoning_supported_efforts"] = efforts
 			if def != "" {
@@ -381,15 +381,15 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		out = append(out, entry)
 	}
-	// global 模型名单：仅 GlobalEnabled=true 时列出（逃生门）。
-	// 名单 = 纯动态探测结果（fetchGlobalModels，失败/无号 → 空）。
+	// global Список моделей: только GlobalEnabled=true вывести при (аварийный выход).
+	// Список = результат чисто динамического зондирования (fetchGlobalModels，ошибка/Без номера → пусто).
 	if h.cfg.GlobalEnabled {
-		// global 域 effort 能力三级查找：探测下发桶（权威）→ 静态兜底表 → 省略。
-		// 先 fetchGlobalModels（内部探测并落 effort 桶），再按 id 取快照。
+		// global Домен effort трехуровневый поиск capability: проба бакета выдачи (авторитетный)→ статическая fallback-таблица → Пропущено.
+		// Сначала fetchGlobalModels（Внутренняя проба и запись effort бакет), затем по id Сделать снапшот.
 		globalIDs, globalAccount := h.fetchGlobalModels()
-		// 探测对象形态的全字段条目（与 fetchGlobalModels 共享同一次探测缓存）：
-		// 命中 id 才透出富字段；窄表/失败 → nil，按裸 ID 条目输出（不编造字段）。
-		// globalAccount 为 nil（无 global 号）时返回 nil，跳过富字段映射。
+		// полнопольная запись формы объекта зондирования (с fetchGlobalModels совместное использование одного кэша зондирования):
+		// Попадание id только тогда отдавать расширенные поля; узкая таблица/ошибка → nil，по raw ID Вывод записей (без выдуманных полей).
+		// globalAccount для nil（отсутствует global №) возвращает nil，Пропустить маппинг расширенных полей.
 		globalInfos := map[string]upstream.ModelInfo{}
 		for _, mi := range h.cfg.Upstream.FetchGlobalModelInfos(globalAccount) {
 			globalInfos[mi.ID] = mi
@@ -397,12 +397,12 @@ func (h *Handler) modelList() []map[string]any {
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
 			entry := map[string]any{
-				"id":       "global:" + id,
-				"object":   "model",
-				"created":  1753600000,
+				"id": "global:" + id,
+				"object": "model",
+				"created": 1753600000,
 				"owned_by": "workbuddy",
 			}
-			// context_length / max_output_tokens 四级查找（与 CN 动态分支同口径）。
+			// context_length / max_output_tokens четырёхуровневый поиск (с CN динамическая ветка — тот же калибр).
 			var remoteCtx, remoteOut int64
 			if mi, ok := globalInfos[id]; ok {
 				entry = applyModelInfoFields(entry, mi)
@@ -424,12 +424,12 @@ func (h *Handler) modelList() []map[string]any {
 	return out
 }
 
-// fetchGlobalModels 返回 global 模型名单（纯动态探测结果）及被探测账号。
-// 缓存/失败回落封在 upstream.FetchGlobalModels（内部 1h + 5min 负缓存）。
-// 本方法只负责"何时探测"：池中无 global 账号 → 空名单 + nil 账号（零上游调用）。
-// 返回的 acct 供调用方在同一账号上取富 ModelInfo（FetchGlobalModelInfos 与
-// FetchGlobalModels 共享缓存，不会触发第二次上游探测）。
-// GlobalEnabled=false 时 modelList 已不进入本分支（逃生门在调用方 gate）。
+// fetchGlobalModels вернуть global список моделей (чисто динамический результат детекта) и проверяемый аккаунт.
+// Кеш/Фолбэк при ошибке фиксируется в upstream.FetchGlobalModels（Внутренний 1h + 5min отрицательный кэш).
+// Данный метод отвечает только за"Когда зондировать"：В пуле нет global Аккаунт → пустой список + nil аккаунт (ноль вызовов апстрима).
+// Возвращённый acct Для выборки caller'ом rich-данных на одном аккаунте ModelInfo（FetchGlobalModelInfos и
+// FetchGlobalModels общий кэш, не вызовет повторного зондирования апстрима).
+// GlobalEnabled=false Время modelList уже не входит в эту ветку (аварийный выход у вызывающей стороны gate）。
 func (h *Handler) fetchGlobalModels() ([]string, *auth.Auth) {
 	acct := h.cfg.Pool.PickExcludingForRealm(nil, "", "global")
 	if acct == nil {
@@ -438,15 +438,15 @@ func (h *Handler) fetchGlobalModels() ([]string, *auth.Auth) {
 	return h.cfg.Upstream.FetchGlobalModels(acct), acct
 }
 
-// fetchDynamicModels 从第一个可用 CN 账号拉模型列表（含 contextWindow/maxTokens），
-// 缓存 10min。
-// 选号与 /panel/api/models 完全同口径（AvailableUIDsForRealm("cn") 首个 + AuthByUID），
-// 而非 Pool.Pick()：Pick 无 realm 过滤，混合池里可能选中 global 号去打 CN 端点，
-// 表现为偶发失败/面板与 /v1/models 两套目录（PR #38 报告并给出的选号修复）。
-// 缓存 + 5min 负缓存按既有语义**保留**（#38 原案整体删除缓存被拒）：公开端点逐请求
-// 实时拉取 = 每次 2 个上游探测，客户端周期性刷新模型列表会持续打上游；上游故障时
-// 无冷却窗口，客户端重试即放大请求量——负缓存正是为此设计（见 handler_test 吸收
-// 上游 9832283 的注释）；且 cachedModelsSnapshot（gateway_hint 判定）依赖缓存写入。
+// fetchDynamicModels с первого доступного CN аккаунт запрашивает список моделей (вкл. contextWindow/maxTokens），
+// Кеш 10min。
+// Выбор номера и /panel/api/models Полностью в том же срезе (AvailableUIDsForRealm("cn") первый + AuthByUID），
+// а не Pool.Pick()：Pick отсутствует realm фильтрация, в смешанном пуле может быть выбран global номером бить CN Эндпоинт,
+// Проявляется как спорадический сбой/Панель и /v1/models два набора каталогов (PR #38 отчёт и исправление выбора номера).
+// Кеш + 5min негативный кэш по прежней семантике**сохранить**（#38 Отказ в полной очистке кэша по исходному кейсу): публичный эндпоинт — на каждый запрос
+// Получение в реальном времени = Каждый раз 2 проб апстрима, клиент периодически обновляет список моделей с постоянными запросами к апстриму; при сбое апстрима
+// Без окна охлаждения повтор клиента сразу усиливает нагрузку — negative cache как раз для этого (см. handler_test поглощение
+// апстрим 9832283 комментарий); и cachedModelsSnapshot（gateway_hint решение) зависит от записи в кэш.
 func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 	dynamicModelsCache.RLock()
 	if len(dynamicModelsCache.ids) > 0 && time.Since(dynamicModelsCache.fetched) < dynamicModelsTTL {
@@ -454,7 +454,7 @@ func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 		dynamicModelsCache.RUnlock()
 		return out
 	}
-	// 失败负缓存：冷却期内不再请求上游。
+	// Негативный кэш ошибки: в период кулдауна не запрашивать апстрим.
 	if !dynamicModelsCache.lastFail.IsZero() && time.Since(dynamicModelsCache.lastFail) < modelsFetchFailCooldown {
 		dynamicModelsCache.RUnlock()
 		return nil
@@ -471,9 +471,9 @@ func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 	}
 	infos, err := h.cfg.Upstream.FetchModels(acct)
 	if err != nil || len(infos) == 0 {
-		// 拉取失败只进负缓存（5min lastFail），不 NoteError：NoteError 喂的是 chat
-		// 熔断器，models 端点偶发 5xx 跨界惩罚 chat 通道健康的账号；
-		// models 拉取失败 ≠ 账号 chat 不可用。
+		// Ошибка pull — только в негативный кэш (5min lastFail），Не NoteError：NoteError подаётся chat
+		// Circuit breaker,models Эндпоинт — спорадически 5xx Кросс-штраф chat Аккаунты со здоровым каналом;
+		// models Ошибка получения ≠ Аккаунт chat недоступно.
 		dynamicModelsCache.Lock()
 		dynamicModelsCache.lastFail = time.Now()
 		dynamicModelsCache.Unlock()
@@ -482,14 +482,14 @@ func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 	dynamicModelsCache.Lock()
 	dynamicModelsCache.ids = infos
 	dynamicModelsCache.fetched = time.Now()
-	dynamicModelsCache.lastFail = time.Time{} // 成功则清空负缓存
+	dynamicModelsCache.lastFail = time.Time{} // при успехе — очистка негативного кэша
 	dynamicModelsCache.Unlock()
 	return infos
 }
 
-// cachedModelsSnapshot 只读模型目录缓存（TTL 内快照）；缓存冷/空 → nil。
-// 不发起任何上游调用（hint 判定用：错误路径加一次 FetchModels 网络调用既拖慢
-// 错误响应、又污染上游调用语义）。
+// cachedModelsSnapshot кэш каталога моделей только для чтения (TTL снимок внутри); кэш холодный/пустой → nil。
+// Без исходящих вызовов upstream (hint Для решения: +1 по ошибочному пути FetchModels сетевой вызов замедляет
+// ошибочный ответ и загрязняет семантику вызова апстрима).
 func cachedModelsSnapshot() []upstream.ModelInfo {
 	dynamicModelsCache.RLock()
 	defer dynamicModelsCache.RUnlock()
@@ -500,39 +500,39 @@ func cachedModelsSnapshot() []upstream.ModelInfo {
 }
 
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
-	// 客户端 IP 提取（按请求传递到 ChatStream，不透传时 upstream 侧忽略）；
-	// 消除早年共享字段方案的并发交叉污染（issue：ClientIP 竞态）。
+	// Клиент IP извлечение (передается с запросом в ChatStream，При отсутствии проброса upstream игнорируется на стороне);
+	// устранение кросс-загрязнения конкурентности старой схемы общих полей (issue：ClientIP гонка).
 	clientIP := upstream.ExtractClientIP(r)
-	// 请求体无大小上限（max_body_mb 已移除，对齐上游）：完整读入，超限类问题交由
-	// 上游自然返回错误（其响应经既有错误分类链路透出，信息量更大）。#41 的截断
-	// 防御语义保留在读错误路径——移除预拦截后，截断只可能来自客户端自己断流，
-	// 读 body 出错就地 400，不把半截 JSON 喂上游 unmarshal 报 unexpected EOF 冤枉罚号。
+	// тело запроса без лимита размера (max_body_mb уже удалено, выровнено с апстримом): полное чтение, проблемы превышения лимита передаются
+	// Апстрим сам вернет ошибку (его ответ пройдет по существующей цепочке классификации ошибок, информативнее).#41 усечение
+	// Защитная семантика сохраняется в пути ошибки чтения — после снятия предперехвата обрыв возможен только из-за разрыва соединения самим клиентом,
+	// Чтение body При ошибке — обработка на месте 400，Не брать половину JSON подача в апстрим unmarshal Отчет unexpected EOF Ложное наказание аккаунта.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}
 	var peek struct {
-		Stream bool   `json:"stream"`
-		Model  string `json:"model"`
+		Stream bool `json:"stream"`
+		Model string `json:"model"`
 	}
 	_ = json.Unmarshal(body, &peek)
 
-	// realm 前缀解析（D6）：model 名可能带 "[realm:]" 前缀。剥出 realm + bareModel，
-	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
-	// 裸名 → ("cn", 原串)，CN 现状零回归。
+	// realm разбор префикса (D6）：model Имя может содержать "[realm:]" префикс. Извлечь realm + bareModel，
+	// bareModel Для выбора номера/Липкость/исходящий body Перезапись (префикс — протокол маршрутизации на стороне шлюза, апстрим принимает только чистое имя).
+	// Голое имя → ("cn", Исходная строка)，CN текущее состояние — без регресса.
 	realm, bareModel := resolveModel(peek.Model)
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
 	}
 
-	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
+	// Статистика на уровне запроса: на выходе сразу строка табличного лога (проходит любой путь).
 	st := newChatStat(time.Now(), body, peek.Stream)
 	if tr := requestTraceFrom(r); tr != nil {
 		tr.stat = st
-		// 来源在 ServeHTTP 入口采集（此时才知道开关与请求头），此处转交给统计对象，
-		// 让 stdout 流水行与归档事件共用同一份来源值，两处不会漂移。
+		// Источник в ServeHTTP Сбор на входе (только здесь известны флаги и заголовки запроса), здесь передать объекту статистики,
+		// разрешить stdout Строка потока и событие архива используют одно значение источника, расхождения исключены.
 		st.clientIP, st.userAgent = tr.clientIP, tr.userAgent
 	}
 	defer st.done()
@@ -540,32 +540,32 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	tried := map[string]bool{}
 	var lastErr error
 
-	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
-	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
-	// 会话级（RequestIDForKey(sessKey)），不悄悄退化成轮级——提取本身与粘性无关。
+	// Липкость сессии: извлечь ключ сессии из тела запроса и распарсить привязанный номер (не найдено/если недействительно, то stickyUID пусто — идти через обычную ротацию).
+	// ExtractKey Отвязано от sticky-переключателя (issue #35 сторона): при отключении sticky агрегирующий PK семейства заголовков сессии всё равно по
+	// Уровень сессии (RequestIDForKey(sessKey)），Не деградировать тихо до round-robin — само извлечение не связано с аффинностью.
 	sessKey := session.ExtractKey(body)
 	stickyUID := ""
 	if h.cfg.Session != nil && sessKey != "" {
-		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
-		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
+		// Парсинг по модели: привязанный номер в**Текущая модель**Получено 6004 При достижении лимита считать недоступным → перераспределить,
+		// а не зависать на лимитном номере с повторными ошибками («После лимита смена номера невозможна«правильное решение).
 		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, peek.Model); ok {
 			stickyUID = uid
 		}
 	}
 
-	// 轮级聚合键：按 body 里最后一条 user 消息派生（同轮内所有上游调用同键，
-	// 换 user 消息换键）。#170 起带会话键的客户端也统一走轮级（对齐官方桌面 CLI
-	// 的 X-Conversation-Request-ID 轮级语义——TraceStartHook 每次 USER_PROMPT_SUBMIT
-	// 清空重生成），故不再限 sessKey=="" 才计算；sessKey 由下方派生处以复合键方式
-	// 入键（防不同会话同轮文本互撞）。
-	// 必须在下方 prompt.Rewrite 之前取——改写会动 messages 内容，之后取会让键漂移。
+	// Ключ агрегации уровня раунда: по body последняя запись в user деривация сообщения (все апстрим-вызовы в раунде с одним ключом,
+	// замена user смена ключа сообщения).#170 клиенты с ключом сессии также идут через ротацию на уровне раунда (выравнивание с официальным десктопом CLI
+	// X-Conversation-Request-ID семантика на уровне раунда —TraceStartHook Каждый раз USER_PROMPT_SUBMIT
+	// очистка и перегенерация), поэтому больше не лимитируется sessKey==«« только тогда считать;sessKey ниже по коду производным составным ключом
+	// Ключ ввода (защита от коллизии текста одного раунда в разных сессиях).
+	// Должно быть ниже prompt.Rewrite брать до — перезапись затронет messages контент, последующее чтение сдвинет ключ.
 	turnKey := session.TurnKey(body)
 
-	// gateway_hint 判定所需的请求形态（image_url part）：在改写前取（与 turnKey
-	// 同理）。11133「模型不支持图片」指向的前提。
+	// gateway_hint Форма запроса для проверки (image_url part）：брать до рерайта (с turnKey
+	// аналогично).11133「предпосылка для указания "модель не поддерживает изображения».
 	reqHasImage := hasImagePart(body)
 
-	// 在途租约：成功选中即占名额；函数出口（含成功 return 与 panic）统一释放。
+	// аренда in-flight: успешный выбор сразу резервирует слот; выход из функции (включая успех return и panic）Единое освобождение.
 	var heldUID string
 	defer func() {
 		if heldUID != "" {
@@ -578,15 +578,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			heldUID = ""
 		}
 	}
-	// unbindSticky 解绑当前会话粘性号（stickyUID 非空时）。供「粘性号不可用/被抢」与 fail 共用。
-	// 幂等：stickyUID 已空则空操作；不会误解绑其他轮的绑定。仅当 Session != nil 时 stickyUID 才会非空。
+	// unbindSticky Отвязать sticky-аккаунт текущей сессии (stickyUID когда непусто). Для "sticky-номер недоступен/«перехвачено» и fail Общий.
+	// Идемпотентность:stickyUID если уже пусто — no-op; не снимет привязку другого раунда. Только когда Session != nil Время stickyUID только тогда непусто.
 	unbindSticky := func() {
 		if stickyUID != "" {
 			h.cfg.Session.Unbind(sessKey)
 			stickyUID = ""
 		}
 	}
-	// fail 在轮转失败分支统一：释放租约 + 若失败号正是粘性号则解绑（下次请求重新分配）。
+	// fail В ветке ошибки ротации едино: освободить лиз + если упавший аккаунт — sticky, отвязать (переназначить при следующем запросе).
 	fail := func(uid string) {
 		releaseHeld()
 		if stickyUID != "" && uid == stickyUID {
@@ -623,40 +623,40 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		h.cfg.Pool.RecordTokenUsage(uid, delta)
 
-		// 用量时序记录。ok 以「上游是否给了 usage」判定：空 delta 意味着这次尝试
-		// 没拿到任何 token 统计（传输错误 / >=400 / 解析失败），计为失败尝试。
-		// 失败也计入请求数——否则重试放大在「用量」视图里看不见。
+		// Запись таймлайна использования.ok по признаку "выдал ли апстрим usage」Условие: пусто delta Означает, что эта попытка
+		// Ничего не получено token статистика (ошибка передачи / >=400 / ошибка парсинга), засчитывается как неудачная попытка.
+		// Неудачи тоже учитываются в числе запросов — иначе amplification ретраев не видна в представлении "Использование».
 		if h.cfg.Usage != nil {
 			realm := "cn"
 			if a, ok := h.cfg.Pool.Status(uid); ok && a.Realm != "" {
 				realm = a.Realm
 			}
 			h.cfg.Usage.Add(time.Now(), realm, uid, delta.Model, usage.Delta{
-				PromptTokens:     delta.PromptTokens,
-				HasPromptTokens:  delta.HasPromptTokens,
+				PromptTokens: delta.PromptTokens,
+				HasPromptTokens: delta.HasPromptTokens,
 				CompletionTokens: delta.CompletionTokens,
-				HasCompletion:    delta.HasCompletionTokens,
-				TotalTokens:      delta.TotalTokens,
-				HasTotal:         delta.HasTotalTokens,
-				Credit:           credit,
-				HasCredit:        hasCredit,
-				ModelRate:        modelRate,
-				LatencyMs:        delta.LatencyMs,
-				HasLatency:       delta.HasLatencyMs,
-				TokensPerSecond:  delta.TokensPerSecond,
-				HasTPS:           delta.HasTokensPerSecond,
+				HasCompletion: delta.HasCompletionTokens,
+				TotalTokens: delta.TotalTokens,
+				HasTotal: delta.HasTotalTokens,
+				Credit: credit,
+				HasCredit: hasCredit,
+				ModelRate: modelRate,
+				LatencyMs: delta.LatencyMs,
+				HasLatency: delta.HasLatencyMs,
+				TokensPerSecond: delta.TokensPerSecond,
+				HasTPS: delta.HasTokensPerSecond,
 			}, delta.HasTotalTokens || delta.HasCompletionTokens || delta.HasPromptTokens)
 		}
 	}
 
-	// 系统提示词改写（出站前、轮转前；每个请求一次）。
-	//   - custom：用自有提示词替换客户端 system/developer（从源头消灭 system 指纹误报）。
-	//   - append：开头连续 system/developer 块后插自有提示词，既有消息逐字不动
-	//     （客户端项目规范/工具约定与网关提示词并用，issue #129）。
-	//   - passthrough + 降级期：换 Degraded 中性提示词直达，不再先撞 400。
-	//   - passthrough / append 非降级期：透传客户端原始 system（append 则再插一条网关 system）。
-	// 降级裁决：append 在降级期退化为 replace（Rewrite(Degraded)）——append 带
-	// 指纹原文重试是确定性再撞墙，replace 是一次性最小抢救（issue #129 设计 §4）。
+	// переписывание системного промпта (перед отправкой, перед ротацией; один раз на запрос).
+	// - custom：Заменить клиентский промпт своим system/developer（Устранить в корне system ложное срабатывание отпечатка).
+	// - append：подряд с начала system/developer после блока вставить собственный промпт, существующие сообщения — дословно без изменений
+	// （спецификация проекта клиента/Соглашение об инструментах совместно с промптом шлюза,issue #129）。
+	// - passthrough + Период даунгрейда: смена Degraded нейтральный промпт напрямую, без предварительного коллизии 400。
+	// - passthrough / append вне деградации: прозрачная передача оригинала клиента system（append то вставить еще один шлюз system）。
+	// Решение о даунгрейде:append в период деградации деградирует до replace（Rewrite(Degraded)）——append Лента
+	// Повтор с исходным fingerprint детерминированно снова упрется в стену,replace одноразовое минимальное восстановление (issue #129 Дизайн §4）。
 	degradedApplied := false
 	if h.cfg.PromptMode == "custom" && h.cfg.PromptText != "" {
 		body = prompt.Rewrite(body, h.cfg.PromptText)
@@ -667,55 +667,55 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		degradedApplied = true
 	}
 
-	// outbound model 名重写为 bareModel（D6）：realm 前缀是网关侧路由协议，
-	// 上游不认前缀（global 账号也请求裸模型名）。裸名时 bareModel==peek.Model 恒等。
+	// outbound model имя переопределено в bareModel（D6）：realm Префикс — протокол маршрутизации на стороне шлюза,
+	// Апстрим не распознаёт префикс (global аккаунт также запрашивает голое имя модели). При голом имени bareModel==peek.Model Тождественно.
 	if bareModel != peek.Model {
 		body = rewriteModel(body, bareModel)
 	}
 
-	// 会话头族（issue #35）：后台按 X-Conversation-Request-ID（对话轮级）聚合请求，
-	// 官方客户端一次 user send 内所有 tool call/重试/换号复用同一个 ID。此处**轮转
-	// 循环外**生成一次，循环内每次出站原样复用 → 换号/重试/降级全部同 ID，后台不再
-	// 碎片化（此前网关一个都不发，上游按 HTTP 请求逐条记账，同一对话几十上百个
+	// Семейство заголовков сессии (issue #35）：Бэкенд по X-Conversation-Request-ID（уровень раунда диалога) агрегированный запрос,
+	// официальный клиент один раз user send все внутри tool call/повтор/Смена аккаунта с переиспользованием того же ID。здесь**ротация
+	// Вне цикла**Сгенерировать один раз, в цикле при каждом исходящем вызове переиспользовать как есть → Смена номера/повтор/деградация всех однотипных ID，Бэкенд больше не
+	// Фрагментация (ранее шлюз ничего не отправлял, апстрим по HTTP поштучный учет запросов, десятки-сотни на один диалог
 	// RequestID）。
-	//   - conversationID：body 提取（透传客户端原值，缺省空串——不伪造）；
-	//   - conversationRequestID：入站 X-Conversation-Request-ID 透传优先，否则按
-	//     粘性 key 进程内稳定生成；粘性 key 也空时走轮级兜底（TurnKey/TurnRequestID），
-	//     无 user 消息时退化成本请求级随机——轮转内捕获一次即共享；
-	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
+	// - conversationID：body Извлечь (прозрачно передать исходное значение клиента, по умолчанию пустая строка — без подделки);
+	// - conversationRequestID：inbound X-Conversation-Request-ID приоритет сквозной передачи, иначе по
+	// Липкость key стабильная генерация внутри процесса; sticky key если тоже пусто — идти в поуровневый fallback (TurnKey/TurnRequestID），
+	// отсутствует user при сообщении деградация до рандома на уровне запроса — один перехват внутри ротации шарится;
+	// - messageID В ChatHeaders Генерация внутри каждого сообщения (независимо на уровне сообщения, без внешней видимости).
 	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationID(body)}
 	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {
 		chatMeta.ConversationRequestID = v
 	} else if turnKey != "" && sessKey != "" {
-		// 轮级复合键：sessKey 入键防跨会话同轮文本互撞（#170 统一轮级）。
+		// составной ключ уровня раунда:sessKey ключ ввода для защиты от коллизии текста одного раунда между сессиями (#170 унифицированный уровень раунда).
 		chatMeta.ConversationRequestID = session.TurnRequestID(sessKey + ":" + turnKey)
 	} else if turnKey != "" {
-		// 无会话键客户端：纯轮级键（既有兜底语义不变，存量会话键值零漂移）。
+		// Клиент без ключа сессии: чисто раундовый ключ (fallback-семантика без изменений, дрейф значений существующих ключей сессии нулевой).
 		chatMeta.ConversationRequestID = session.TurnRequestID(turnKey)
 	} else if sessKey != "" {
-		// 残留空态兜底（无 user 消息/无可签名内容）：会话级聚合，好于请求级随机。
+		// фолбэк на остаточное пустое состояние (нет user Сообщение/нет подписываемого контента): агрегация на уровне сессии, лучше рандома на уровне запроса.
 		chatMeta.ConversationRequestID = session.RequestIDForKey(sessKey)
 	} else {
-		// 无会话键也无轮级键：请求级随机（轮转内捕获一次即共享）。
+		// Нет ключа сессии и ключа раунда: рандом на уровне запроса (захват один раз за ротацию и шарится).
 		chatMeta.ConversationRequestID = session.TurnRequestID("")
 	}
 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
 
 	for i := 0; i < h.cfg.MaxRotate; i++ {
-		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
+		// Выбор номера: приоритет у sticky-номера (PickByUIDForModel Доступность этой модели уже проверена + в пути не заполнен), иначе обычная ротация.
 		var acct *auth.Auth
 		if stickyUID != "" {
 			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, bareModel)
 			if acct == nil || (realm != "" && acct.Realm() != realm) {
-				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
-				// 本次回落普通轮换。
+				// Sticky-ID недоступен для текущей модели (кулдаун/заполнено/данная модель 6004 лимит) или realm Несоответствие → Отвязать,
+				// В этот раз откат к обычной ротации.
 				unbindSticky()
 				acct = nil
 			}
 		}
 		if acct == nil {
-			// 模型感知 + realm 感知选号：模型非空时启用 6004 模型级冷却豁免
-			// （healthyForModel），realm 谓词过滤跨域账号。
+			// Осведомленность о модели + realm выбор с учетом восприятия: включается при непустой модели 6004 освобождение от кулдауна на уровне модели
+			// （healthyForModel），realm предикат фильтрует кросс-доменные аккаунты.
 			acct = h.cfg.Pool.PickExcludingForRealm(tried, bareModel, realm)
 		}
 		if acct == nil {
@@ -723,26 +723,26 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		st.uid = acct.UID
-		// 同步昵称：请求流水行只写 uid8 时无法直观看是哪一号，昵称随本次选号带入日志行。
+		// Синхронизация никнейма: в строке лога запроса только запись uid8 невозможно визуально определить какой номер, никнейм подставляется в строку лога при текущем выборе.
 		st.nick = acct.Nickname
 		tried[acct.UID] = true
 
-		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
+		// занятие квоты in-transit:Pick аккаунты с исчерпанным лимитом пропущены, здесь CAS Страховка от гонки при конкурентном захвате слотов.
 		if !h.cfg.Pool.Acquire(acct.UID) {
-			// 若被抢的正是粘性号，立即解绑并回落普通轮换，避免下一轮仍撞同一个
-			// 满载粘性号再浪费一次 PickByUID 往返（语义与 fail()/PickByUID-nil 的解绑一致）。
+			// если захвачен именно sticky-аккаунт, сразу отвязать и откатиться к обычной ротации, чтобы в след. раунде не попасть на тот же
+			// не тратить лишний раз sticky-аккаунт при полной загрузке PickByUID туда-обратно (семантика и fail()/PickByUID-nil соответствует отвязке).
 			if stickyUID != "" && acct.UID == stickyUID {
 				unbindSticky()
 			}
 			if !rotateBackoff(i, r.Context()) {
-				// 客户端已断连：换号重试无意义，终止轮转走末端错误透传。
+				// клиент уже отключён: смена аккаунта и ретрай бессмысленны, прекратить ротацию и пробросить конечную ошибку.
 				break
 			}
-			continue // 最后一个名额被并发抢走 → 换号
+			continue // Последний слот захвачен конкурентно → Смена номера
 		}
 		heldUID = acct.UID
 
-		// token 临近过期 → 先 refresh（失败冷却换号）
+		// token Скоро истекает → Сначала refresh（cooldown при ошибке со сменой номера)
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
 			if err := h.cfg.Upstream.RefreshToken(acct); err != nil {
 				lastErr = err
@@ -754,38 +754,38 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				}
 				fail(acct.UID)
 				if !rotateBackoff(i, r.Context()) {
-					break // ctx 取消：终止轮转（refresh 失败换号退避）
+					break // ctx Отмена: прервать ротацию (refresh бэкофф со сменой аккаунта при ошибке)
 				}
 				continue
 			}
 			if err := acct.SaveAtomic(); err != nil {
-				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
+				// обновление успешно, но запись на диск не удалась: при следующем запуске будет использован старый token，должен экспонироваться
 				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
 		}
 
-		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
+		// Клиент IP Передача по запросу (PassthroughIP инжект при включении; устранение гонки по общему полю).
 		attemptStarted := time.Now()
 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
-		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
-		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支
-		// （terr 为 nil 但 status>=400，如 ErrNone 兜底）回落本地 Classify，双保险。
+		// Классифицирующий конверт формируется за один раз:upstream Уже возвращено по ветке ошибки *upstream.Error（Kind +
+		// Retry-After разбор заголовка). Ошибка транспортного уровня (не *Error）ветка смены номера с джиттером; защитная ветка
+		// （terr для nil Но status>=400，Например ErrNone запасной) откат на локальный Classify，Двойная страховка.
 		var uerr *upstream.Error
 		if errors.As(terr, &uerr) {
 			status = uerr.Status
 		}
 		if uerr == nil && terr != nil {
-			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
-			// 连败兜底（issue #114）：喂连败计数——连不上上游是「不知道原因的失败」，
-			// 连败 N 次临时出池，单次/偶发不罚（NoteFailures 内部达阈才动作）。
-			// 上游 client 已打 transport error 日志。
+			// Сетевой джиттер: только смена аккаунта, без инкремента счётчикаОтключение (ошибки транспортного уровня слишком строги для последовательногоОтключение).
+			// Фолбэк при серии неудач (issue #114）：подача счётчика серийных неудач — недоступность апстрима это "неудача с неизвестной причиной»,
+			// серия неудач N раз временно выведен из пула, однократно/Единичный сбой не штрафуется (NoteFailures действие только при достижении внутреннего порога).
+			// апстрим client уже размечено transport error лог.
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted)
 			st.status = http.StatusServiceUnavailable
 			lastErr = terr
 			h.cfg.Pool.NoteFailures(acct.UID)
 			fail(acct.UID)
 			if !rotateBackoff(i, r.Context()) {
-				break // ctx 取消：终止轮转（传输层错误换号退避）
+				break // ctx Отмена: прервать ротацию (ошибка транспортного уровня — смена номера с бэкоффом)
 			}
 			continue
 		}
@@ -799,30 +799,30 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				kind = upstream.Classify(status, string(respBody))
 				uerr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
 			}
-			// 内容拦截误报（passthrough/append 模式首遇）：判定为 system 指纹误报，
-			// 触发降级到次日 00:00 CST，换 Degraded 中性提示词同请求内重试（append
-			// 降级重试同样退化为 replace——原文在场只会确定性再撞 400）。
-			// 第二次仍被拦（用户内容本身触发审核）→ 回内容防火墙错误（见下分支）。
-			// 内容问题非账号问题：applyErrorPolicy 不罚账号（见 ErrContentBlocked 分支）。
+			// Ложное срабатывание блокировки контента (passthrough/append первая встреча режима): считается system ложное срабатывание отпечатка,
+			// триггер даунгрейда на следующий день 00:00 CST，замена Degraded Нейтральный промпт, повтор внутри запроса (append
+			// ретрай с даунгрейдом также деградирует в replace——при наличии оригинала детерминированно снова коллизия 400）。
+			// вторая попытка снова заблокирована (контент пользователя сам триггерит модерацию)→ Возврат ошибки контент-фильтра (см. ветку ниже).
+			// проблема контента, а не аккаунта:applyErrorPolicy аккаунт не штрафуется (см. ErrContentBlocked ветка).
 			if kind == upstream.ErrContentBlocked && (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && !degradedApplied {
 				h.degrade.Trigger()
 				body = prompt.Rewrite(body, prompt.Degraded)
 				degradedApplied = true
-				delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
+				delete(tried, acct.UID) // Даже пул из одного аккаунта получает шанс ретрая (ретрай с даунгрейдом занимает один слот)
 				releaseHeld()
 				log.Printf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
 				continue
 			}
 			if kind == upstream.ErrContentBlocked {
-				// 内容命中网关内容防火墙：立即回客户端，**不轮转**——换任何账号都会撞同一
-				// 审核，轮转纯属浪费时间。不罚账号（ErrContentBlocked 分支无冷却/熔断/NoteError）。
-				// error-passthrough：message 装上游 body 原文（code/msg/requestId 原样），
-				// 不再改写成网关固定文案——客户端必须看到真实错误才能排查。
+				// Контент сработал на контент-WAF шлюза: немедленно вернуть клиенту,**без ротации**——смена любого аккаунта приведет к тому же
+				// модерация, ротация — пустая трата времени. Аккаунт не штрафуется (ErrContentBlocked Ветка без кулдауна/Circuit Breaker/NoteError）。
+				// error-passthrough：message Установить апстрим body оригинал (code/msg/requestId как есть),
+				// больше не переписывать на фиксированный текст шлюза — клиент должен видеть реальную ошибку для диагностики.
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 				fail(acct.UID)
 				msg := string(respBody)
 				if strings.TrimSpace(msg) == "" {
-					// 空 body 兜底：无上游原文可透传，保留可读分类文案（不编造原文）。
+					// пустой body Фолбэк: нет исходного текста апстрима для транзита, сохранить читаемый текст категории (не выдумывать оригинал).
 					msg = "content blocked by upstream content firewall"
 				}
 				writeOpenAIErrorHint(w, http.StatusBadRequest, "content_blocked", msg,
@@ -831,12 +831,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
-			// 11115「prompt is too long」：立即透传上游原文回客户端，**不罚号不轮转**
-			// ——上下文超限是请求的问题（同一 body 换任何号都超限，白扔健康号配额；
-			// 与 WAF IP fail-fast 同哲学：确定与账号无关的错误直接终止轮转）。
-			// applyErrorPolicy ErrPromptTooLong 分支零动作，fail 只释放租约。
-			// message 装上游 body 原文（含真实 token 数与上限值——上游原文是最有价值
-			// 的错误信息，客户端必须看到，禁止固定词覆盖）。
+			// 11115「prompt is too long」：Немедленно прокинуть исходный ответ апстрима клиенту,**без штрафа аккаунта и без ротации**
+			// ——Превышение контекста — ошибка запроса (тот же body смена любого аккаунта — всё равно превышение лимита, зря тратится квота здорового аккаунта;
+			// и WAF IP fail-fast та же философия: ошибка, точно не связанная с аккаунтом, сразу прерывает ротацию).
+			// applyErrorPolicy ErrPromptTooLong ветка без действия,fail Освобождает только лиз.
+			// message Установить апстрим body Оригинал (включая реальный token число и лимит — оригинал апстрима наиболее ценен
+			// сообщение об ошибке, клиент должен видеть, запрещена перезапись фиксированным текстом).
 			if kind == upstream.ErrPromptTooLong {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 				fail(acct.UID)
@@ -846,8 +846,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
-			// 图片格式/数据无效：立即透传上游原文回客户端，不罚号不轮转。
-			// 同一 body 换账号仍是同样的解析结果，轮转只会放大无效请求。
+			// формат изображения/Данные недействительны: немедленно прокинуть оригинал апстрима клиенту, без штрафа для номера и без ротации.
+			// Тот же body Смена аккаунта даёт тот же результат парсинга, ротация лишь усилит невалидные запросы.
 			if kind == upstream.ErrImageInvalid {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 				fail(acct.UID)
@@ -861,50 +861,50 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
-			// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
-			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
+			// lastErr Нести полностью body（uerr.Msg В upstream Обрезка на стороне 200 символы, прозрачная передача семантики
+			// требуется полный оригинал)+ Kind/RetryAfter（Маппинг endpoint и длительность cooldown — общие).
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 			fail(acct.UID)
-			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
-			// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）
-			// 则立即终止轮转——继续换号只会把请求放大 MaxRotate 倍打同一出口 IP，
-			// 加重风控。账号级软冷却已在上方 applyErrorPolicy 照常记账。
+			// WAF IP Уровень fail-fast（имеет приоритет над rotateBackoff Бэкофф —IP бэкофф бессмыслен при перехвате уровня):
+			// данный раз WAF 403 Подать на вход IP автомат уровня, при активации (попадания по нескольким номерам в коротком окне,IP заблокирован, а не аккаунт)
+			// то немедленно прервать ротацию — дальнейшая смена номера только усилит запросы MaxRotate Повтор на тот же egress IP，
+			// усиление риск-контроля. мягкий кулдаун на уровне аккаунта — выше applyErrorPolicy штатный учёт.
 			if kind == upstream.ErrWafBlock && h.wafIP.noteWaf(acct.UID) {
 				break
 			}
 			if !rotateBackoff(i, r.Context()) {
-				break // ctx 取消：终止轮转（分类错误换号退避）
+				break // ctx Отмена: прервать ротацию (откат со сменой номера при ошибке классификации)
 			}
 			continue
 		}
 		h.cfg.Pool.NoteSuccess(acct.UID)
-		// 11102 负缓存清命：该账号该模型实测成功，立即解除避让（不必等 TTL 到期）。
-		// BlockModelClear 按 "11102" reason 前缀识别，只清 11102 条目、不碰 6004 独立冷却。
+		// 11102 Сброс негативного кэша: для этого аккаунта и модели успех подтвержден тестом, немедленно снять обход (не ждать TTL истекает).
+		// BlockModelClear Нажать "11102" reason Распознавание по префиксу, очищать только 11102 записей, не трогать 6004 независимый cooldown.
 		h.cfg.Pool.BlockModelClear(acct.UID, bareModel)
-		// 粘性跟随最终成功号：本轮成功的账号成为该会话的粘性绑定（覆盖旧绑定）。
-		// 若 sticky 号失败、轮换到别的号成功，这里把会话重绑到新号，多轮对话下一跳不再随机抽。
+		// Липкая привязка к итоговому успешному номеру: аккаунт, успешный в этом раунде, становится липкой привязкой сессии (перекрывает старую привязку).
+		// Если sticky ошибка аккаунта, ротация на другой успешна — сессия перепривязывается к новому аккаунту, следующий хоп многораундового диалога без случайного выбора.
 		if sessKey != "" && h.cfg.Session != nil {
 			h.cfg.Session.Bind(sessKey, acct.UID)
 		}
 		if peek.Stream {
-			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
+			// Потоковый режим: сразу закрыть апстрим после сквозной передачи body，Избежать defer Накапливается в сценарии ротации fd。
 			st.status = http.StatusOK
 			stats := newChatStatsReaderSince(rc, st.start)
-			// gateway_hint（SSE）：成功状态 200 已开流，中途 error 帧透传时附加
-			// hint 字段（hintFn 惰性求值——正常流零开销，只有真撞到 error 帧才
-			// 组装请求上下文做判定）。
+			// gateway_hint（SSE）：статус успеха 200 Поток уже открыт, в середине error Добавляется при сквозной передаче фрейма
+			// hint Поле (hintFn ленивое вычисление — в штатном потоке нулевые накладные расходы, только при реальном коллизии error кадр только
+			// Собрать контекст запроса для решения).
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
 				return h.hintContext(bareModel, reqHasImage)
 			}))
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
-				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
-				// 兜底（HTTP 头已发出只能 200），但这是上游缺陷不是成功——日志/
-				// 状态收敛到 502 观测，与非流式 Aggregate 空流→502 upstream_parse
-				// 同语义（此前 `_ =` 吞错把失败流记成 200，运维看到假成功）。
-				// 只认 IsEmptyStreamError：客户端断连的写失败不误标（人已走，
-				// 502 观测没有意义）。
+				// апстрим 200 Но пустой поток (0 валидный кадр):StreamHint Уже записано error Кадр + [DONE]
+				// фолбэк (HTTP Заголовки уже отправлены, можно только 200），Но это дефект апстрима, а не успех — лог/
+				// Состояние сходится к 502 наблюдение, с нестриминговым Aggregate Пустой поток→502 upstream_parse
+				// Та же семантика (ранее `_ =` Подавление ошибки с пометкой неуспешного потока как 200，эксплуатация видит ложный успех).
+				// Принимается только IsEmptyStreamError：ошибка записи при дисконнекте клиента не помечается ложно (клиент уже ушёл,
+				// 502 наблюдение бессмысленно).
 				st.status = http.StatusBadGateway
 				st.outcome = reqlog.OutcomeStreamError
 				log.Printf("WARN: [server] stream acct=%s model=%s: empty upstream stream (200+0 frames)", logfmt.Label(acct.UID, acct.Nickname), bareModel)
@@ -918,14 +918,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			credit, hasCredit := stats.Credit()
 			recordAttempt(acct.UID, stats.Usage(), credit, hasCredit, attemptStarted)
 			st.ttfb = stats.TTFB()
-			// usage 缺失时保留 chatStat.toks 的 -1 哨兵（观测缺失 → 显示 "-"），
-			// 不写入零值——否则「没观测到 usage」被伪造成「测得 0 token」，
-			// 与非流式走 completionTokens 返回 -1 的口径不一致。
+			// usage При отсутствии сохранить chatStat.toks -1 Сентинел (отсутствие наблюдения → Отображение "-"），
+			// ноль не писать — иначе "не наблюдалось usage」сфальсифицировано как "измерено 0 token」，
+			// и нестриминговый путь completionTokens вернуть -1 несогласованность метрики.
 			if toks, hasUsage := stats.Tokens(); hasUsage {
 				st.toks = toks
 			}
-			// 成本账本：末帧 usage 带 credit 与 token 总数时记录实测单价，
-			// 供下次选号把免费/便宜的号排在前面。
+			// Учет стоимости: последний фрейм usage Лента credit и token при подсчёте общего кол-ва фиксировать факт. цену за ед.,
+			// для следующего выбора номера бесплатно/Дешевые аккаунты в начале.
 			if hasCredit {
 				st.credit = credit
 				st.hasCredit = true
@@ -940,7 +940,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		rc.Close()
 		if err != nil {
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted)
-			// 上游流解析失败：客户端还没看到任何输出，回 502 并告知原因。
+			// Ошибка парсинга upstream-потока: клиент еще не видел вывода, вернуть 502 и сообщить причину.
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_parse", err.Error())
 			st.status = http.StatusBadGateway
 			st.outcome = reqlog.OutcomeHTTPError
@@ -952,7 +952,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.status = http.StatusOK
 		st.outcome = reqlog.OutcomeSuccess
 		st.toks = completionTokens(resp)
-		// 成本账本（非流式）：从聚合响应的 usage 取 credit 与 token 总数。
+		// Учет затрат (не потоковый): из агрегированного ответа usage получить credit и token Общее количество.
 		if hasCredit {
 			st.credit = credit
 			st.hasCredit = true
@@ -960,17 +960,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// 末端错误透传（error-passthrough）：上游返回的错误原样透传，不再规范化成固定文案。
-	// 上游返回（*upstream.Error）→ error.message 装**上游 body 原文**（code/msg/
-	// requestId 原样保留）。HTTP 状态码按 OpenAI 兼容口径映射类别：ErrSoftRate → 429
-	// （限流语义、客户端应等待重试），其余保持 503。本地调度类错误（无可用账号/
-	// 传输层抖动/非上游返回的 lastErr）→ 保留自有文案 no_healthy_account（本地错误
-	// 没有上游原文可透传，不编造）。
+	// Проброс ошибки с терминала (error-passthrough）：Ошибки апстрима пробрасываются как есть, без нормализации в фиксированный текст.
+	// Upstream вернул (*upstream.Error）→ error.message Установка**апстрим body Исходный текст**（code/msg/
+	// requestId сохранить как есть).HTTP Код статуса по OpenAI Совместимое отображение категорий:ErrSoftRate → 429
+	// （семантика rate limit, клиент должен ждать ретрай), остальное без изменений 503。Ошибка локального планировщика (нет доступных аккаунтов/
+	// Джиттер транспортного уровня/Возвращено не апстримом lastErr）→ сохранить собственный текст no_healthy_account（Локальная ошибка
+	// нет оригинала апстрима для проброса, не выдумывать).
 	status := http.StatusServiceUnavailable
 	code := "no_healthy_account"
 	msg := "all accounts are temporarily unavailable, please retry later"
-	// gateway_hint（末端透传）：上游错误按 Kind + 原文 + 请求形态判定；本地调度类
-	// 错误（无上游原文）固定 no_healthy_account hint。
+	// gateway_hint（Сквозная передача на краю): ошибки апстрима как Kind + Исходный текст + Определение формы запроса; класс локальной диспетчеризации
+	// ошибка (без оригинала апстрима) фиксированная no_healthy_account hint。
 	hint := upstream.NoHealthyAccountHint()
 	var ue *upstream.Error
 	if errors.As(lastErr, &ue) {
@@ -982,15 +982,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			msg = "rate limited: all accounts are cooling down, please wait a moment and try again"
 		case upstream.ErrWafBlock:
 			if h.wafIP.active() {
-				// IP 级拦截措辞（fail-fast 终止路径）：网关出口 IP 被 WAF 拦截、
-				// 轮转已止损、窗口过后自动解除。客户端提前重试无意义（换号不换 IP）；
-				// 有上游原文时原文优先（下方统一）。
+				// IP формулировка блокировки уровня (fail-fast Путь завершения): выход шлюза IP Получено WAF перехват,
+				// Ротация уже стоп-лосс, после окна снимется автоматически. Ранний ретрай клиента бессмыслен (смена аккаунта без смены IP）；
+				// при наличии оригинала апстрима приоритет у оригинала (ниже унифицировано).
 				code = "waf_ip_blocked"
 				msg = "waf ip-level block: upstream firewall is blocking the gateway IP, rotation stopped; retry after the block window expires"
 			}
 		}
 		if s := strings.TrimSpace(ue.Msg); s != "" {
-			// 上游原文优先：透传 code/msg/requestId，不拼接本地前缀。
+			// Приоритет оригинала апстрима: сквозная передача code/msg/requestId，Не конкатенировать локальный префикс.
 			msg = s
 		}
 	}
@@ -999,8 +999,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	st.outcome = reqlog.OutcomeHTTPError
 }
 
-// promptTooLongMessage 11115 透传 message：上游 body 原文（含真实 token 数/
-// 上限值/requestId，客户端自行排查）；空 body 兜底为可读分类短文案（不编造原文）。
+// promptTooLongMessage 11115 Прозрачная передача message：апстрим body Оригинал (включая реальный token Число/
+// верхний предел/requestId，клиент разбирается сам); пусто body Fallback — читаемый короткий текст категории (без выдумывания оригинала).
 func promptTooLongMessage(body string) string {
 	if strings.TrimSpace(body) == "" {
 		return "prompt is too long"
@@ -1008,8 +1008,8 @@ func promptTooLongMessage(body string) string {
 	return body
 }
 
-// usageCreditTotal 从聚合响应取 usage.credit 与 total_tokens（成本台账非流式入口）。
-// 任一字段缺失/非法 → ok=false（不记录）。
+// usageCreditTotal Брать из агрегированного ответа usage.credit и total_tokens（непотоковый вход реестра затрат).
+// Отсутствует любое поле/Недопустимый → ok=false（не логировать).
 func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool) {
 	usage, _ := resp["usage"].(map[string]any)
 	if usage == nil {
@@ -1023,11 +1023,11 @@ func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool) 
 	return c, int(t), true
 }
 
-// rotateBackoff 轮转间指数退避 + 抖动（WAF 403 修复 P0-2）：第 i 次轮转失败
-// （continue 换号前）等待 backoffAfter(i)（500ms·2^i 封顶 8s，±25% 抖动），
-// ctx 取消（客户端断连/优雅停机）返回 false——调用方立即终止轮转（客户端已走，
-// 换号重试无意义）。退避是「换号前歇一下」让上游频控窗口滑过；正常单号请求
-// （首次成功）不经过本函数，零开销。
+// rotateBackoff Экспоненциальный бэкофф между ротациями + Джиттер (WAF 403 исправление P0-2）：№ i ошибка ротации
+// （continue ожидание перед сменой номера) backoffAfter(i)（500ms·2^i Потолок 8s，±25% джиттер),
+// ctx Отмена (обрыв соединения клиента/graceful shutdown) возврат false——Вызывающая сторона немедленно прерывает ротацию (клиент уже ушёл,
+// повтор со сменой номера бессмыслен). Backoff — "пауза перед сменой номера» для проскальзывания окна rate-limit upstream; обычный запрос с одним номером
+// （первый успех) не проходит через эту функцию, нулевая стоимость.
 func rotateBackoff(i int, ctx context.Context) bool {
 	d := backoffAfter(i)
 	if d <= 0 {
@@ -1040,49 +1040,49 @@ func rotateBackoff(i int, ctx context.Context) bool {
 	return true
 }
 
-// applyErrorPolicy 按错误分类对账号施加冷却/禁用/熔断策略（最终版状态机）。
-// kind 是唯一权威分类（来自 upstream.Classify / ChatStreamContext 的 *Error 信封），
-// 此处不再按原始 status 二次判断。仅在 chatCompletions 轮转循环内调用：内容拦截
-// 会立即 400 返回，其余种类 continue 换号（continue 前由 rotateBackoff 退避）。
+// applyErrorPolicy применять кулдаун к аккаунту по классу ошибки/Отключено/Стратегия circuit breaker (финальный автомат состояний).
+// kind единственная авторитетная классификация (из upstream.Classify / ChatStreamContext *Error конверт),
+// Здесь больше не по исходному status Повторная проверка. Только при chatCompletions Вызов внутри цикла ротации: блокировка контента
+// Немедленно 400 Возврат, остальные типы continue Смена аккаунта (continue ранее через rotateBackoff бэкофф).
 //
-// 十条路径，各司其职：
-//   - ErrHardCredit → CooldownUntilTomorrow4AM：即时硬冷却到次日 04:00（等签到恢复）。
-//   - ErrSoftRate → 优先对齐上游重置墙钟（带「将在 … 重置」时 6004 走模型级豁免、
-//     非 6004 走账号级，均不指数堆加）；无重置时间才走有界退避。冷却时长优先采信
-//     Retry-After 头（uerr.RetryAfter，body 文案墙钟之外的头形态来源）。
-//   - ErrWafBlock → 账号级软冷却：**不 Disable**——WAF 403 是 IP/指纹维频控信号，
-//     罚过即走、到期自愈。时长优先 Retry-After 头；缺失按 wafCooldownBase(60s)
-//     起 · softStreak 指数、封顶 soft_rate_max 的既有 CooldownSoftRate 有界退避。
-//     基数经 jitterDur 抖动（防多账号同相位冷却到期再聚团）。
-//   - ErrNotFound → Cooldown(CoolSoft, notFoundCooldown 固定 60s)：短冷却防雪崩。
-//   - ErrSessionDead → Disable：session 死亡，永久禁用（需人工重登）。
-//   - ErrContentBlocked → 不罚账号；passthrough 首遇触发降级重试，最终仍拦则回 400。
-//   - ErrBadParams → 不罚账号（同 ErrContentBlocked 待遇），但仍轮转。
-//   - ErrPromptTooLong → 11115：请求的问题不是账号的问题。零动作（不冷却/不熔断/
-//     不 NoteError、不喂连败），chatCompletions 已直接透传原文返回不轮转。
-//   - ErrImageInvalid → 图片格式/数据无效：请求的问题不是账号的问题（同一 body
-//     换任何号都会得到相同的解析错误）。零动作（不冷却/不熔断/不 NoteError、
-//     不喂连败），chatCompletions 已直接透传原文返回不轮转。
-//   - ErrModelBlocked → BlockModelBackoff：(账号, 模型) 11102 负缓存避让。
-//   - ErrServer → NoteError：喂单一连续失败计数器 fails + 累计错误 errTotal，
-//     达到 breakerThreshold 触发熔断（指数退避）。
-//   - 其他（default：ErrClient/ErrNone）→ 只换号不罚（防雪崩），不喂熔断；ErrClient
-//     额外喂连败计数（NoteFailures，issue #114）：未知 4xx 连败 N 次临时出池。
+// десять путей, каждый со своей функцией:
+// - ErrHardCredit → CooldownUntilTomorrow4AM：немедленное жесткое охлаждение до следующего дня 04:00（ожидание восстановления чекина).
+// - ErrSoftRate → Приоритет выравнивания wall-clock сброса апстрима (с "будет через … при "сбросе» 6004 идёт через освобождение на уровне модели,
+// не 6004 идёт на уровне аккаунта, без экспоненциального накопления); только без времени сброса — ограниченный бэкофф. Длительность кулдауна приоритетно из
+// Retry-After заголовок (uerr.RetryAfter，body источник формы заголовка помимо wall-clock текста).
+// - ErrWafBlock → Мягкий кулдаун на уровне аккаунта:**Не Disable**——WAF 403 Да IP/Сигнал rate-limit по отпечатку,
+// наказан — сразу уход, по истечении — самовосстановление. Приоритет длительности Retry-After заголовок; при отсутствии — по wafCooldownBase(60s)
+// Запуск · softStreak экспонента, потолок soft_rate_max существующий CooldownSoftRate Ограниченный бэкофф.
+// база после jitterDur Джиттер (защита от синхронного истечения кулдауна у множества аккаунтов и повторной кластеризации).
+// - ErrNotFound → Cooldown(CoolSoft, notFoundCooldown Фиксированный 60s)：короткий кулдаун против лавины.
+// - ErrSessionDead → Disable：session смерть, перманентная блокировка (требуется ручной перелогин).
+// - ErrContentBlocked → Аккаунт не штрафуется;passthrough При первой встрече — ретрай с даунгрейдом, если всё равно блокируется — вернуть 400。
+// - ErrBadParams → Аккаунт не штрафуется (аналог. ErrContentBlocked обращение), но ротация продолжается.
+// - ErrPromptTooLong → 11115：проблема запроса, а не аккаунта. Нулевое действие (без кулдауна/БезОтключение/
+// Не NoteError、не подавать серию поражений),chatCompletions уже напрямую прокинут оригинал без ротации.
+// - ErrImageInvalid → формат изображения/Данные невалидны: проблема запроса, а не аккаунта (тот же body
+// Смена любого номера даст ту же ошибку парсинга). Нулевое действие (без кулдауна/БезОтключение/Не NoteError、
+// не подавать серию поражений),chatCompletions уже напрямую прокинут оригинал без ротации.
+// - ErrModelBlocked → BlockModelBackoff：(Аккаунт, Модель) 11102 Обход отрицательного кэша.
+// - ErrServer → NoteError：Подача в единый счётчик последовательных ошибок fails + накопленные ошибки errTotal，
+// достигнуто breakerThreshold триггеритОтключение (экспоненциальный бэкофф).
+// - прочее (default：ErrClient/ErrNone）→ Только смена аккаунта без штрафа (защита от лавины), без подачи на circuit breaker;ErrClient
+// Дополнительно прокинуть счётчик поражений подряд (NoteFailures，issue #114）：неизвестно 4xx серия неудач N раз временного вывода из пула.
 //
-// body 仅在 ErrSoftRate/ErrAccountFault 分支用于解析重置时间/分野；model 为请求
-// 携带的模型名。uerr 是 ChatStreamContext 返回的分类信封（可携带 RetryAfter）；
-// 零值/防御路径下为 nil，冷却时长回落既有计算。
+// body Только при ErrSoftRate/ErrAccountFault ветка для парсинга времени сброса/разделение;model для запроса
+// передаваемое имя модели.uerr Да ChatStreamContext Возвращаемый классифицированный конверт (может содержать RetryAfter）；
+// нулевое значение/в защитном пути — nil，длительность кулдауна откатывается к имеющемуся расчёту.
 func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, model string, uerr *upstream.Error) {
 	switch kind {
 	case upstream.ErrHardCredit:
-		// 402 + 余额关键词即积分耗尽：同步冷却到次日 04:00（签到任务 09/21 点恢复），
-		// 不需要异步核查（冗余）。立即换号。
-		h.cfg.Pool.CooldownUntilTomorrow4AM(uid, "余额不足")
+		// 402 + ключевое слово баланса = исчерпание баллов: синхронный кулдаун до следующего дня 04:00（Задача чекина 09/21 точка восстановления),
+		// Асинхронная проверка не требуется (избыточно). Немедленно сменить аккаунт.
+		h.cfg.Pool.CooldownUntilTomorrow4AM(uid, "Недостаточно средств")
 	case upstream.ErrSoftRate:
-		// 统一对齐上游重置时间：只要 body 带「将在 … 重置」，无论业务 code 是
-		// 6004 还是 11140 rate-limiting 等形态，都精确冷却到该墙钟、绝不指数堆加。
-		//   - 模型级（6004）→ CooldownSoftForModel：写 modelCooldowns[model]，切模型豁免。
-		//   - 账号级（非 6004）→ CooldownSoftRate：写账号级 until，不产生模型豁免。
+		// Единое выравнивание по времени сброса апстрима: если body содержит "будет через … сброс», независимо от бизнеса code Да
+		// 6004 или 11140 rate-limiting и т.п. формы — точное охлаждение до указанного wall-clock, без экспоненциального накопления.
+		// - уровень модели (6004）→ CooldownSoftForModel：Запись modelCooldowns[model]，освобождение при переключении модели.
+		// - уровень аккаунта (не 6004）→ CooldownSoftRate：Запись уровня аккаунта until，Не даёт исключения для модели.
 		modelRateLimited := upstream.IsModelRateLimit(body)
 		if resetAt, ok := upstream.ParseRateReset(body); ok {
 			if modelRateLimited {
@@ -1092,8 +1092,8 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 			h.cfg.Pool.CooldownSoftRate(uid, h.softCooldown(), resetAt, "429 rate limit")
 			return
 		}
-		// body 无重置文案但带 Retry-After 头 → 冷却到该时刻（不做指数堆加）。
-		// 头优先于「有界退避」，但低于 body 重置文案（文案是上游更权威的口径）。
+		// body без текста сброса, но с Retry-After Заголовок → охлаждение до этого момента (без экспоненциального накопления).
+		// заголовок приоритетнее "ограниченного бэкоффа», но ниже body Сброс текста (текст апстрима — более авторитетная формулировка).
 		if uerr != nil && uerr.RetryAfter > 0 {
 			h.cfg.Pool.CooldownSoftRate(uid, h.softCooldown(), time.Now().Add(uerr.RetryAfter), "429 rate limit (retry-after)")
 			if modelRateLimited {
@@ -1101,18 +1101,18 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 			}
 			return
 		}
-		// 无重置时间 → 账号级有界退避（soft_rate 基数起、softStreak 翻倍、封顶
-		// soft_rate_max；已在冷却中的兜底探测不翻倍）。基数取 h.softCooldown()
-		// （热改优先），管理面板改 soft_rate 后立即生效。
+		// без времени сброса → bounded backoff на уровне аккаунта (soft_rate От базы,softStreak Удвоение, потолок
+		// soft_rate_max；резервный пробинг уже на кулдауне не удваивается). База h.softCooldown()
+		// （Приоритет hot-fix), изменение через админ-панель soft_rate вступает в силу немедленно.
 		h.cfg.Pool.CooldownSoftRate(uid, h.softCooldown(), time.Time{}, "429 rate limit")
 		if modelRateLimited {
 			h.cfg.Pool.RecordModelRateLimitAudit(uid, model, "6004 model rate limit (reset unknown)")
 		}
 	case upstream.ErrWafBlock:
-		// WAF 403（无业务信封拦截形态）。软冷却复用 CooldownSoftRate 家族：基数
-		// wafCooldownBase（60s，抖动后落 [45s,75s]）、softStreak 指数升级、封顶
-		// soft_rate_max、冷却中兜底探测不翻倍——全部继承既有语义。
-		// Retry-After 头优先（WAF 拦截页可能带该头）。不 Disable。
+		// WAF 403（форма блокировки без бизнес-конверта). Повторное использование мягкого кулдауна CooldownSoftRate семейство: мощность
+		// wafCooldownBase（60s，После джиттера оседает [45s,75s]）、softStreak Экспоненциальное повышение, с потолком
+		// soft_rate_max、fallback-проба в кулдауне не удваивается — полностью наследует текущую семантику.
+		// Retry-After приоритет заголовка (WAF Страница перехвата может содержать этот заголовок). Не Disable。
 		if uerr != nil && uerr.RetryAfter > 0 {
 			h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Now().Add(uerr.RetryAfter), "waf 403 block (retry-after)")
 			return
@@ -1121,48 +1121,48 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 	case upstream.ErrSessionDead:
 		h.cfg.Pool.Disable(uid, "12153 session dead")
 	case upstream.ErrNotFound:
-		// 404 短冷却（软冷却），防雪崩。固定 notFoundCooldown，不随 soft_rate 退避：
-		// 偶发路径缺失不是限流信号，不该按限流惩罚升级。
+		// 404 Короткий кулдаун (мягкий кулдаун), защита от лавины. Фиксирован notFoundCooldown，Не зависит от soft_rate Бэкофф:
+		// спорадическое отсутствие пути — не сигнал rate limit, нельзя эскалировать как лимит.
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, notFoundCooldown, "upstream 404")
 	case upstream.ErrAccountFault:
-		// 账号级授权/配额故障按 msg 分野（口径与 Classify 的 accountFaultMarkers 一致）：
-		//   - "request illegal"（code 11140）→ 账号级**授权封禁**：硬禁用（Disable）。
-		//   - 14017（trial not activated）→ register 未完成，补完 register 后可能自愈，
-		//     **保持软冷却**（禁用会让用户补完 register 后仍无法用）。
-		// 大小写不敏感（与 Classify 的 marker 匹配同口径）。
+		// Авторизация на уровне аккаунта/Сбой квоты по msg разделение (метрики и Classify accountFaultMarkers совпадает):
+		// - "request illegal"（code 11140）→ Уровень аккаунта**Блокировка авторизации**：Жёсткое отключение (Disable）。
+		// - 14017（trial not activated）→ register Не завершено, дополнить register после возможно самовосстановление,
+		// **сохранять мягкий кулдаун**（блокировка заставит пользователя дозаполнить register после всё равно недоступно).
+		// без учета регистра (с Classify marker совпадение в той же размерности).
 		if strings.Contains(strings.ToLower(body), "request illegal") {
 			h.cfg.Pool.Disable(uid, "account banned by upstream (11140 request illegal), re-login required")
 			return
 		}
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, h.softCooldown(), "account fault (14017)")
 	case upstream.ErrServer:
-		// 5xx 上游故障：Classify 已把 ≥500 判为 ErrServer，在此喂熔断计数（不再手写 status>=500）。
+		// 5xx сбой апстрима:Classify Уже ≥500 Классифицируется как ErrServer，здесь инкрементировать счётчик circuit breaker (больше не вручную status>=500）。
 		h.cfg.Pool.NoteError(uid)
 	case upstream.ErrContentBlocked:
-		// 内容策略拦截（误报）：内容问题非账号问题，不罚账号（无冷却/熔断/NoteError）。
-		// passthrough 模式由 chatCompletions 内降级重试处理；custom 模式本不会到此分支。
+		// Блокировка контент-политикой (ложное срабатывание): проблема контента, не аккаунта, аккаунт не штрафуется (без кулдауна/Circuit Breaker/NoteError）。
+		// passthrough режим определяется chatCompletions внутри — деградированный ретрай;custom В этом режиме сюда ветка не должна заходить.
 	case upstream.ErrPromptTooLong:
-		// 11115「prompt is too long」：请求的问题不是账号的问题（同一 body 换任何
-		// 号都超限）。零动作（不冷却/不熔断/不 NoteError，同 ErrContentBlocked 待遇），
-		// chatCompletions 已直接透传原文返回不轮转——该分支只为文档完备。
+		// 11115「prompt is too long」：Проблема запроса, а не аккаунта (тот же body Заменить любой
+		// номера превысили лимит). Нулевое действие (без охлаждения/БезОтключение/Не NoteError，Совм. ErrContentBlocked условия),
+		// chatCompletions Уже напрямую прокинут оригинал без ротации — ветка только для полноты документации.
 	case upstream.ErrImageInvalid:
-		// 图片格式/数据无效：请求的问题不是账号的问题（同一 body 换任何号都会
-		// 得到相同解析错误）。零动作，chatCompletions 已 fail-fast 透传。
+		// формат изображения/Данные невалидны: проблема запроса, а не аккаунта (тот же body смена любого аккаунта всё равно
+		// получена та же ошибка парсинга). Никаких действий,chatCompletions Уже fail-fast сквозная передача.
 	case upstream.ErrBadParams:
-		// 请求体解析失败（400 + Unmarshal chat params failed / 11101）：发给上游的 body
-		// 有问题（网关侧不再截断，均为客户端畸形 JSON）。换了账号照样 400，
-		// 不罚账号（无冷却/熔断/NoteError，同 ErrContentBlocked 待遇）；但**仍然轮转**
-		// ——不同账号可能有不同的模型权限，值得换号再试一次。
+		// Ошибка парсинга тела запроса (400 + Unmarshal chat params failed / 11101）：отправляемое в upstream body
+		// есть проблема (на стороне шлюза усечение больше не выполняется, всё — некорректные запросы клиента JSON）。смена аккаунта — всё равно 400，
+		// аккаунт не штрафуется (без кулдауна/Circuit Breaker/NoteError，Совм. ErrContentBlocked обработка); но**все равно ротируется**
+		// ——У разных аккаунтов могут быть разные права на модели, стоит сменить номер и попробовать снова.
 	case upstream.ErrModelBlocked:
-		// 11102「该后端无此模型」：(账号, 模型) 负缓存避让。复用 modelCooldowns 机制
-		// （与 6004 同域），选号侧 healthyForModel 对该账号自动避开该模型。
-		// 立即换号（本轮 continue），该账号该模型冷却，下次选号避开。
+		// 11102「У данного бэкенда нет этой модели»:(Аккаунт, Модель) Обход негативного кэша. Повторное использование modelCooldowns механизм
+		// （и 6004 тот же домен), сторона выбора номера healthyForModel для этого аккаунта автоматически обходить эту модель.
+		// Немедленная смена аккаунта (в этом раунде continue），Кулдаун для этого аккаунта и модели, при следующем выборе — пропуск.
 		h.cfg.Pool.BlockModelBackoff(uid, model, upstream.ModelBlockReason)
 	default:
-		// 其余（ErrClient/ErrNone）：只换号不罚（防雪崩），不喂熔断。
-		// ErrClient（未知 4xx）喂连败计数（issue #114）：连续 N 次该形态失败 →
-		// 账号临时出池（NoteFailures 达阈降权），单次/偶发不罚（不误伤）。ErrNone
-		// 到这里属防御路径（status>=400 但分类成功），语义不明不喂。
+		// остальные (ErrClient/ErrNone）：только смена номера без штрафа (анти-лавина), без триггера circuit breaker.
+		// ErrClient（неизвестно 4xx）подача счётчика серии поражений (issue #114）：непрерывно N раз сбой данной формы →
+		// Временное выведение аккаунта из пула (NoteFailures при достижении порога — понижение веса), за раз/Единичный сбой не штрафуется (без ложных срабатываний).ErrNone
+		// Попадание сюда — защитный путь (status>=400 но классификация успешна), при неясной семантике не подавать.
 		if kind == upstream.ErrClient {
 			h.cfg.Pool.NoteFailures(uid)
 		}
@@ -1184,22 +1184,22 @@ func writeOpenAIError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
 			"message": msg,
-			"type":    "api_error",
-			"code":    code,
+			"type": "api_error",
+			"code": code,
 		},
 	})
 }
 
-// wafCooldownBase WAF 403 软冷却基数（建议 60s 起；抖动 ±25% 后落 [45s,75s]，
-// 实际进入 CooldownSoftRate 后再按 softStreak 指数、封顶 soft_rate_max）。
-// 与 SoftCooldown 分流的原因：WAF 403 是 IP/指纹维频控，信号比 429「账号级限流」轻
-// （账号本身健康），但比 404 重（带粘性会连环）；60s 级的快速避让已足够让频控窗口
-// 滑过。抖动复用 backoff.go jitterDur（单一来源）。
+// wafCooldownBase WAF 403 база мягкого кулдауна (рекомендуется 60s от; джиттер ±25% после отката [45s,75s]，
+// фактический вход в CooldownSoftRate затем по softStreak экспонента, потолок soft_rate_max）。
+// и SoftCooldown Причина разделения трафика:WAF 403 Да IP/частотный контроль по отпечатку, соотношение сигналов 429「лимит на уровне аккаунта» — мягкий
+// （сам аккаунт здоров), но чем 404 повтор (с прилипанием вызовет каскад);60s быстрого бэкоффа уровня достаточно, чтобы окно rate-limit
+// пропуск. джиттер переиспользуется backoff.go jitterDur（единственный источник).
 const wafCooldownBase = 60 * time.Second
 
-// writeOpenAIErrorHint 同 writeOpenAIError，另在 error 对象上附加
-// error.gateway_hint（hint 为空串时不带字段——未覆盖形态不编造）。
-// message 仍是上游原文透传（hint 只做并列补充，绝不替换/包装 message）。
+// writeOpenAIErrorHint Совм. writeOpenAIError，дополнительно в error Привязка к объекту
+// error.gateway_hint（hint при пустой строке поле не передавать — непокрытые кейсы не выдумывать).
+// message по-прежнемуПрозрачная передача оригинала апстрима (hint только параллельное дополнение, без замены/Обёртка message）。
 func writeOpenAIErrorHint(w http.ResponseWriter, status int, code, msg, hint string) {
 	if hint == "" {
 		writeOpenAIError(w, status, code, msg)
@@ -1207,17 +1207,17 @@ func writeOpenAIErrorHint(w http.ResponseWriter, status int, code, msg, hint str
 	}
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
-			"message":      msg,
-			"type":         "api_error",
-			"code":         code,
+			"message": msg,
+			"type": "api_error",
+			"code": code,
 			"gateway_hint": hint,
 		},
 	})
 }
 
-// hasImagePart 报告聊天请求体是否携带多模态 image_url part（OpenAI 兼容形态
-// messages[].content[] {type:"image_url"}）。畸形/其他形态一律 false（hint 侧
-// 宁缺勿滥：判不出带图就不给「模型不支持图片」指向）。
+// hasImagePart сообщить, содержит ли тело chat-запроса мультимодальность image_url part（OpenAI Совместимая форма
+// messages[].content[] {type:"image_url"}）。битый/Все остальные формы false（hint Боковой
+// Лучше меньше, да лучше: если не удалось определить наличие изображения, не выдавать указание "модель не поддерживает изображения»).
 func hasImagePart(body []byte) bool {
 	var peek struct {
 		Messages []struct {
@@ -1239,14 +1239,14 @@ func hasImagePart(body []byte) bool {
 	return false
 }
 
-// hintContext 组装 chatCompletions 的 gateway_hint 判定上下文：请求裸模型名 +
-// 是否带图 + 模型目录 supports_images 声明（目录未收录 → ModelInCatalog=false，
-// 不做「不支持」判定，防查不到误判）。仅错误路径调用（成功请求零开销）。
+// hintContext сборка chatCompletions gateway_hint Контекст решения: запрос голого имени модели +
+// Наличие изображения + Каталог моделей supports_images заявление (каталог не содержит → ModelInCatalog=false，
+// БезПроверка "не поддерживается» для защиты от ложного срабатывания при отсутствии данных). Вызывается только на ветке ошибки (успешные запросы — ноль оверхеда).
 //
-// 目录查询只读既有缓存快照（cachedModelsSnapshot），**不触发上游拉取**：错误路径
-// 加一次 FetchModels 网络调用既拖慢错误响应、又污染上游调用语义（错误风暴时放大
-// 请求量——与 WAF IP fail-fast 的「不放大请求量」哲学相悖）。缓存冷（最近 10min 未
-// 拉过）→ ModelInCatalog=false，11133 退中性 hint（宁缺勿滥，不编造能力事实）。
+// Запрос каталога читает только существующий снапшот кэша (cachedModelsSnapshot），**Не инициировать подтяжку апстрима**：Путь ошибки
+// Добавить один раз FetchModels Сетевой вызов и замедляет ответ с ошибкой, и загрязняет семантику вызова апстрима (при шторме ошибок усиливает
+// объем запросов — и WAF IP fail-fast противоречит философии "не увеличивать объем запросов»). Холодный кэш (последний 10min Не
+// подтянуто)→ ModelInCatalog=false，11133 откат к нейтральному hint（лучше меньше, да лучше, не выдумывать факты о возможностях).
 func (h *Handler) hintContext(bareModel string, hasImage bool) upstream.HintContext {
 	ctx := upstream.HintContext{Model: bareModel, HasImage: hasImage}
 	if bareModel == "" {
@@ -1262,10 +1262,10 @@ func (h *Handler) hintContext(bareModel string, hasImage bool) upstream.HintCont
 	return ctx
 }
 
-// hintOf 末端错误透传的统一 hint 入口：kind + 上游原文 + 请求上下文 →
-// gateway_hint 文案（upstream.GatewayHint 单一事实来源）。uerr 为 nil 时回落
-// body 原文判定（防御路径）。transport 层错误（lastErr 非 *upstream.Error 且
-// 上游没回 body）→ 无 hint（不编造）。
+// hintOf унифицированная сквозная передача конечной ошибки hint Вход:kind + Исходный текст upstream + контекст запроса →
+// gateway_hint Текст (upstream.GatewayHint единый источник истины).uerr для nil откат при
+// body Решение по исходному тексту (защитный путь).transport ошибка уровня (lastErr не *upstream.Error И
+// Апстрим не ответил body）→ отсутствует hint（не выдумывать).
 func (h *Handler) hintOf(kind upstream.ErrKind, body, bareModel string, hasImage bool, uerr *upstream.Error) string {
 	msg := body
 	if uerr != nil && uerr.Msg != "" {

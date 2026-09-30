@@ -1,12 +1,12 @@
-// login.go 面板内嵌的 WorkBuddy CN OAuth 设备授权流程（cmd/login 的进程内移植）。
+// login.go встроенный в панель WorkBuddy CN OAuth Процесс авторизации устройства (cmd/login внутрипроцессный порт).
 //
-//	POST /panel/api/login/start → 拿 state+authUrl，state 存进程内（不再落 /tmp，
-//	  原方案在 Windows 上不可用），返回授权 URL；
-//	GET  /panel/api/login/poll   → 面板前端每 3s 轮询本接口；未完成返回 done=false，
-//	  完成后取 uid/nickname、凭证落盘 auths/workbuddy-<uid>.json、热加载进池
-//	  （pool.Add + Revive），并顺带签到 + 余额刷新 —— 免重启加载新账号。
+//	POST /panel/api/login/start → Взять state+authUrl，state хранение внутри процесса (больше не попадает в /tmp，
+//	 Исходный план в Windows недоступно на ), вернуть авторизацию URL；
+//	GET /panel/api/login/poll → фронтенд панели каждые 3s опрос этого API; если не завершено — возврат done=false，
+//	 получить после завершения uid/nickname、сохранение учётных данных на диск auths/workbuddy-<uid>.json、горячая загрузка в пул
+//	 （pool.Add + Revive），И попутно чекин + обновление баланса —— Загрузка новых аккаунтов без перезапуска.
 //
-// 无 PKCE（workbuddy 设备流由服务端签发 state），请求头与上游端点与 cmd/login 保持一致。
+// отсутствует PKCE（workbuddy Device flow выпускается сервером state），заголовки запроса и апстрим-эндпоинт и cmd/login сохранять консистентность.
 package panel
 
 import (
@@ -24,15 +24,15 @@ import (
 )
 
 const (
-	upstreamBaseCN      = "https://copilot.tencent.com"
-	upstreamBaseGlobal  = "https://www.workbuddy.ai"
-	clientUA            = "CLI/2.63.2 CodeBuddy/2.63.2"
-	originRefererCN     = "https://www.codebuddy.cn"
+	upstreamBaseCN = "https://copilot.tencent.com"
+	upstreamBaseGlobal = "https://www.workbuddy.ai"
+	clientUA = "CLI/2.63.2 CodeBuddy/2.63.2"
+	originRefererCN = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
 )
 
-// loginEndpoints 按 realm 返回设备授权三端点（auth/state、token、account）+ Origin。
-// realm=="global" → 国际版（workbuddy.ai 同域）；cn/非法/缺省 → CN（零回归）。
+// loginEndpoints Нажать realm вернуть три эндпоинта авторизации устройства (auth/state、token、account）+ Origin。
+// realm=="global" → Международная версия (workbuddy.ai тот же домен);cn/Недопустимый/по умолчанию → CN（нулевой регресс).
 func loginEndpoints(realm string) (state, token, account, origin string) {
 	if realm == "global" {
 		base := upstreamBaseGlobal
@@ -48,7 +48,7 @@ func loginEndpoints(realm string) (state, token, account, origin string) {
 		originRefererCN
 }
 
-// loginHTTP 设备授权专用 client：短超时、无 cookie（每请求携带 state，无会话态）。
+// loginHTTP Только для авторизации устройства client：короткий таймаут, без cookie（Каждый запрос несет state，без состояния сессии).
 var loginHTTP = &http.Client{Timeout: 30 * time.Second}
 
 func commonHeaders(req *http.Request, origin string) {
@@ -60,9 +60,9 @@ func commonHeaders(req *http.Request, origin string) {
 	req.Header.Set("User-Agent", clientUA)
 }
 
-// validUID 校验上游返回的 uid 是否可安全用于拼文件名。
-// 只放行字母、数字、下划线、连字符（腾讯侧 uid 实测为 UUID 形态），
-// 长度上限 64 兜底异常超长串；拒绝 . / \ 等路径字符与空串。
+// validUID валидация возвращенного апстримом uid Можно ли безопасно использовать для сборки имени файла.
+// Разрешать только буквы, цифры, подчеркивание, дефис (сторона Tencent uid Фактически измерено как UUID форма),
+// Лимит длины 64 Фолбэк: аномально длинная строка; отклонить . / \ и символы пути с пустой строкой.
 func validUID(uid string) bool {
 	if uid == "" || len(uid) > 64 {
 		return false
@@ -77,14 +77,14 @@ func validUID(uid string) bool {
 	return true
 }
 
-// apiEnvelope 与 upstream 同形：{code,msg,data}，code!=0 视为业务错误。
+// apiEnvelope и upstream Та же форма:{code,msg,data}，code!=0 считать бизнес-ошибкой.
 type apiEnvelope struct {
-	Code int             `json:"code"`
-	Msg  string          `json:"msg"`
+	Code int `json:"code"`
+	Msg string `json:"msg"`
 	Data json.RawMessage `json:"data"`
 }
 
-// doJSON 发一次 JSON 请求并解信封。origin 为 Origin/Referer 基础域（随 realm 切）。
+// doJSON отправить один раз JSON Запросить и распаковать конверт.origin для Origin/Referer Базовый домен (с realm переключение).
 func doJSON(method, fullURL, bearer string, body io.Reader, origin string) (json.RawMessage, int, error) {
 	req, err := http.NewRequest(method, fullURL, body)
 	if err != nil {
@@ -113,8 +113,8 @@ func doJSON(method, fullURL, bearer string, body io.Reader, origin string) (json
 	return env.Data, resp.StatusCode, nil
 }
 
-// loginStart 发起设备授权：POST auth/state 拿授权 URL。
-// body 可带 {"realm":"global"}（缺省 cn）；state 会话记 realm，poll 同 realm 落盘。
+// loginStart Инициировать авторизацию устройства:POST auth/state Получить авторизацию URL。
+// body может содержать {"realm":«global"}（по умолчанию cn）；state запись сессии realm，poll Совм. realm Сброс на диск.
 func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 	realm := "cn"
 	if r.Body != nil {
@@ -134,7 +134,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var st struct {
-		State   string `json:"state"`
+		State string `json:"state"`
 		AuthURL string `json:"authUrl"`
 	}
 	if err := json.Unmarshal(data, &st); err != nil || st.State == "" || st.AuthURL == "" {
@@ -142,7 +142,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.loginMu.Lock()
-	// 顺手回收过期会话，防"开弹窗走开"的 state 滞留。
+	// попутно чистить просроченные сессии, защита от"Открыть попап" state Задержка.
 	for s, sess := range p.logins {
 		if time.Since(sess.created) > loginTTL {
 			delete(p.logins, s)
@@ -150,11 +150,11 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 	}
 	p.logins[st.State] = loginSession{created: time.Now(), realm: realm}
 	p.loginMu.Unlock()
-	log.Printf("panel: 发起 OAuth 添加账号 realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
+	log.Printf("panel: Инициировать OAuth Добавить аккаунт realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": st.AuthURL, "state": st.State, "realm": realm})
 }
 
-// loginPoll 轮询登录态。未完成 → {done:false}；完成 → 建凭证、落盘、热加载、签到。
+// loginPoll опрос состояния логина. Не завершено → {done:false}；Завершено → Создание учётных данных, запись на диск, hot-reload, check-in.
 func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	if state == "" {
@@ -165,73 +165,73 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	sess, known := p.logins[state]
 	p.loginMu.Unlock()
 	if !known {
-		writeErr(w, http.StatusNotFound, "unknown or expired state（请重新发起添加账号）")
+		writeErr(w, http.StatusNotFound, "unknown or expired state（пожалуйста, повторно инициируйте добавление аккаунта)")
 		return
 	}
 	_, epToken, epAcct, origin := loginEndpoints(sess.realm)
 
-	// auth/token 是权威登录状态端点：pending 时业务 code 非 0（"login ing"）。
+	// auth/token — авторитетный эндпоинт статуса логина:pending бизнес при code не 0（"login ing"）。
 	tokRaw, _, err := doJSON(http.MethodGet, epToken+state, "", nil, origin)
 	if err != nil {
-		// pending / 未完成：面板前端继续轮询。
+		// pending / Не завершено: фронтенд панели продолжает polling.
 		writeJSON(w, http.StatusOK, map[string]any{"done": false, "message": err.Error()})
 		return
 	}
 	var tok struct {
-		AccessToken  string `json:"accessToken"`
+		AccessToken string `json:"accessToken"`
 		RefreshToken string `json:"refreshToken"`
-		ExpiresIn    int64  `json:"expiresIn"`
-		Domain       string `json:"domain"`
+		ExpiresIn int64 `json:"expiresIn"`
+		Domain string `json:"domain"`
 	}
 	if err := json.Unmarshal(tokRaw, &tok); err != nil || tok.AccessToken == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"done": false, "message": "waiting for login"})
 		return
 	}
 
-	// 完成：取 uid/nickname（失败不阻塞，仅缺展示名）。
+	// выполнено: взять uid/nickname（сбой не блокирует, отсутствует только отображаемое имя).
 	var acct struct {
-		UID          string `json:"uid"`
+		UID string `json:"uid"`
 		EnterpriseID string `json:"enterpriseId"`
-		Nickname     string `json:"nickname"`
+		Nickname string `json:"nickname"`
 	}
 	if acctRaw, _, err := doJSON(http.MethodGet, epAcct+state, tok.AccessToken, nil, origin); err == nil {
 		_ = json.Unmarshal(acctRaw, &acct)
 	}
 	if acct.UID == "" {
-		writeErr(w, http.StatusBadGateway, "login done but no uid（token 已发但账号信息获取失败，请重试）")
+		writeErr(w, http.StatusBadGateway, "login done but no uid（token отправлено, но не удалось получить данные аккаунта, повторите)")
 		return
 	}
-	// UID 来自上游响应，未经校验就用于拼文件名会被路径穿越利用
+	// UID Из ответа апстрима, без валидации используется для сборки имени файла — уязвимость Path Traversal
 	// （filepath.Join("./auths", "workbuddy-../../evil.json") → auths/evil.json）。
-	// UID 是腾讯侧账号标识，实测为 UUID（十六进制与连字符），故只放行 [A-Za-z0-9_-]。
+	// UID — идентификатор аккаунта на стороне Tencent, фактически UUID（hex и дефис), поэтому пропускать только [A-Za-z0-9_-]。
 	if !validUID(acct.UID) {
-		writeErr(w, http.StatusBadGateway, "上游返回的 uid 含非法字符，拒绝落盘（防路径穿越）")
+		writeErr(w, http.StatusBadGateway, "Возвращённое апстримом uid Содержит недопустимые символы, запись отклонена (защита от path traversal)")
 		return
 	}
 
-	// 凭证落盘（嵌套形，与 auths/ 目录既有格式一致）→ 热加载进池。
+	// сохранение кредов на диск (вложенная форма, и auths/ Соответствует существующему формату каталога)→ Горячая загрузка в пул.
 	if err := os.MkdirAll(p.cfg.AuthDir, 0o755); err != nil {
 		writeErr(w, http.StatusInternalServerError, "mkdir auth dir: "+err.Error())
 		return
 	}
 	a := &auth.Auth{
-		AccessToken:  tok.AccessToken,
+		AccessToken: tok.AccessToken,
 		RefreshToken: tok.RefreshToken,
-		ExpiresAt:    time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix(),
-		Domain:       tok.Domain,
-		UID:          acct.UID,
+		ExpiresAt: time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix(),
+		Domain: tok.Domain,
+		UID: acct.UID,
 		EnterpriseID: acct.EnterpriseID,
-		Nickname:     acct.Nickname,
-		FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", acct.UID)),
+		Nickname: acct.Nickname,
+		FilePath: filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", acct.UID)),
 	}
-	// global 登录：落盘 auth.realm=global（Realm() 按此判域；不写则依赖 domain 后缀回落）。
+	// global Логин: сохранение на диск auth.realm=global（Realm() по этому определяется домен; если не указано — зависит от domain откат по суффиксу).
 	if sess.realm == "global" {
 		if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
 			writeErr(w, http.StatusInternalServerError, "set realm: "+err.Error())
 			return
 		}
 	} else {
-		// CN 也显式补 realm 键（幂等），让 auth 文件形态统一（与 LoadDir 存量迁移对齐）。
+		// CN также явно дополнить realm Ключ (идемпотентность), чтобы auth Унифицированная форма файлов (с LoadDir выравнивание миграции существующих данных).
 		_, _ = a.BackfillRealm()
 	}
 	if err := a.SaveAtomic(); err != nil {
@@ -239,29 +239,29 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.cfg.Pool.Add(a)
-	p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
+	p.cfg.Pool.Revive(acct.UID) // Новый вход = Ручное восстановление: очистить унаследованные блокировки старого номера/Охлаждение/Circuit Breaker
 
-	// 顺带签到 + 余额刷新（幂等；失败不影响登录结果，只体现在返回字段里）。
-	// realm 分支：CN 走 DailyCheckin；global 无 CN 签到体系，改为注册激活 + trial 领取
-	// （D4 门控同 scheduler：CN 任务端点对 global 不发起任何调用）。
+	// Попутно отметить посещение + Обновление баланса (идемпотентно; сбой не влияет на результат логина, отражается только в поле ответа).
+	// realm Ветка:CN Ход DailyCheckin；global отсутствует CN Система чекинов, заменена на активацию при регистрации + trial Получить
+	// （D4 Гейт аналогично scheduler：CN Эндпоинт задач для global никаких вызовов не инициировать).
 	checkinMsg := ""
 	remain := int64(-1)
 	total := int64(0)
 	if sess.realm == "global" {
-		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
-		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
+		// Регистрация/активация (идемпотентно):region required автоматически подставить регион (первый из whitelist,HK）после — повторная активация.
+		// Ошибка не блокирует результат логина (auth уже сохранено на диск), отражается только в поле ответа.
 		if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
-			checkinMsg = "注册激活失败: " + err.Error()
-			log.Printf("panel: global 注册激活 uid=%s: %v", acct.UID, err)
+			checkinMsg = "Ошибка активации регистрации: " + err.Error()
+			log.Printf("panel: global регистрация активации uid=%s: %v", acct.UID, err)
 		} else if activated {
-			log.Printf("panel: global 注册激活 uid=%s 完成", acct.UID)
+			log.Printf("panel: global регистрация активации uid=%s Завершено", acct.UID)
 		}
-		// trial 加油包（幂等 14051 = 已领过，非错误）。
+		// trial Пакет-дозаправка (идемпотентный 14051 = Уже получено, не ошибка).
 		if claimed, err := p.cfg.Upstream.ClaimTrial(a); err != nil {
-			checkinMsg = joinMsg(checkinMsg, "trial 领取失败: "+err.Error())
+			checkinMsg = joinMsg(checkinMsg, "trial Ошибка получения: "+err.Error())
 			log.Printf("panel: global trial uid=%s: %v", acct.UID, err)
 		} else if claimed {
-			log.Printf("panel: global trial uid=%s 已领", acct.UID)
+			log.Printf("panel: global trial uid=%s уже получено", acct.UID)
 		}
 	} else {
 		if err := p.cfg.Upstream.DailyCheckin(a); err != nil {
@@ -276,19 +276,19 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	p.loginMu.Lock()
 	delete(p.logins, state)
 	p.loginMu.Unlock()
-	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
+	log.Printf("panel: Новый аккаунт горячо загружен uid=%s nickname=%q realm=%s（Вступает в силу без перезапуска)", acct.UID, acct.Nickname, sess.realm)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"done":            true,
-		"uid":             acct.UID,
-		"nickname":        acct.Nickname,
-		"realm":           sess.realm,
-		"credits":         remain,
-		"credits_total":   total,
+		"done": true,
+		"uid": acct.UID,
+		"nickname": acct.Nickname,
+		"realm": sess.realm,
+		"credits": remain,
+		"credits_total": total,
 		"checkin_message": checkinMsg,
 	})
 }
 
-// joinMsg 拼接 login 完成后的提示消息（多段用「；」连接，空段跳过）。
+// joinMsg конкатенация login Сообщение после завершения (несколько частей через ";», пустые пропускаются).
 func joinMsg(parts ...string) string {
 	out := ""
 	for _, s := range parts {
@@ -303,10 +303,10 @@ func joinMsg(parts ...string) string {
 	return out
 }
 
-// loginRegions 返回 global 注册可选地区（panel 前端选地区弹窗用；CN 不调用）。
-// 未持账号时返回白名单静态兜底（前端只读展示，不依赖上游）。
+// loginRegions вернуть global Регистрация, опциональный регион (panel Используется для попапа выбора региона на фронтенде;CN не вызывать).
+// При отсутствии аккаунта — статический fallback из белого списка (только отображение на фронте, без зависимости от upstream).
 func (p *Panel) loginRegions(w http.ResponseWriter, r *http.Request) {
-	// 静态白名单（对齐国际版 web 展示集）：面板前端只读展示，无需账号态。
+	// Статический вайтлист (выровнен с intl-версией web Набор отображения): фронтенд панели только для чтения, состояние аккаунта не требуется.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
 		"regions": []map[string]string{

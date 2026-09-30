@@ -4,49 +4,49 @@ import (
 	"testing"
 )
 
-// TestTaskAccountLockSameAccountExclusive 同一账号的任务锁互斥：第二次 tryLock 必须失败，
-// 解锁后可再次获取。这是「重复点一键完成不并发重跑」的核心保障。
+// TestTaskAccountLockSameAccountExclusive мьютекс блокировки задач одного аккаунта: второй tryLock должен завершиться ошибкой,
+// После разблокировки можно получить снова. Это ключевая гарантия "повторный клик — завершение в один клик без конкурентного перезапуска».
 func TestTaskAccountLockSameAccountExclusive(t *testing.T) {
 	p := &Panel{}
 	uid := "u1"
 
 	if !p.tryLockAccount(uid) {
-		t.Fatal("首次加锁应成功")
+		t.Fatal("первая блокировка должна успеть")
 	}
 	if p.tryLockAccount(uid) {
-		t.Fatal("同账号第二次加锁应失败（互斥）")
+		t.Fatal("Вторая блокировка тем же аккаунтом должна завершиться неудачей (мьютекс)")
 	}
 	p.unlockAccount(uid)
 
 	if !p.tryLockAccount(uid) {
-		t.Fatal("解锁后应可再次加锁")
+		t.Fatal("После разблокировки должна быть возможна повторная блокировка")
 	}
 	p.unlockAccount(uid)
 }
 
-// TestTaskAccountLockDifferentAccountsIndependent 不同账号的锁互不影响（并行照旧）。
+// TestTaskAccountLockDifferentAccountsIndependent Блокировки разных аккаунтов не влияют друг на друга (параллельность сохраняется).
 func TestTaskAccountLockDifferentAccountsIndependent(t *testing.T) {
 	p := &Panel{}
 	if !p.tryLockAccount("u1") {
-		t.Fatal("u1 加锁应成功")
+		t.Fatal("u1 Блокировка должна успешно установиться")
 	}
 	if !p.tryLockAccount("u2") {
-		t.Fatal("u2 加锁应成功（不同账号不互斥）")
+		t.Fatal("u2 Блокировка должна успеть (разные аккаунты не взаимоисключаются)")
 	}
 	p.unlockAccount("u2")
 	p.unlockAccount("u1")
 }
 
-// TestTaskAccountLockCrossEntryShared 单任务 auto 与全量 auto_all 共用同一把账号锁
-// （在 handler 层都走 tryLockAccount，这里验证锁命名空间一致）。
+// TestTaskAccountLockCrossEntryShared одна задача auto и полный объем auto_all используют одну блокировку аккаунта
+// （В handler уровни идут через tryLockAccount，здесь проверка совпадения пространства имён блокировки).
 func TestTaskAccountLockCrossEntryShared(t *testing.T) {
 	p := &Panel{}
 	if !p.tryLockAccount("u1") {
-		t.Fatal("u1 加锁应成功")
+		t.Fatal("u1 Блокировка должна успешно установиться")
 	}
-	// 模拟全量入口对同一 uid 加锁——必须被挡（否则两入口可并发）。
+	// Эмуляция полного входа для одного и того же uid Блокировка — должна быть отклонена (иначе два входа могут выполняться конкурентно).
 	if p.tryLockAccount("u1") {
-		t.Fatal("同 uid 跨入口加锁应失败（共用锁）")
+		t.Fatal("Совм. uid Блокировка через разные входы должна падать (общий лок)")
 	}
 	p.unlockAccount("u1")
 }

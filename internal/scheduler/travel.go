@@ -1,5 +1,5 @@
-// travel.go 猫猫旅行巡检状态机：随旅行时点（travel_hours，默认 09 点）对池内每个可用账号单趟推进一次。
-// 无猫 → 同意协议 + 领养；有猫 → 按 travel/status 分派 派出 / 领奖 / 跳过。
+// travel.go Автомат состояний патруля путешествия котиков: по моментам путешествия (travel_hours，По умолчанию 09 ч.) один проход по каждому доступному аккаунту в пуле.
+// без кота → принять соглашение + Усыновление; есть кот → Нажать travel/status диспетчеризация Отправить / Получение награды / Пропустить.
 package scheduler
 
 import (
@@ -13,37 +13,37 @@ import (
 )
 
 const (
-	// travelLocationID 派出地点固定 4（古镇客栈）：4 个地点收益/时长区间完全相同，无最优解。
+	// travelLocationID Место отправки фиксировано 4（гостиница в древнем городе):4 Доход по N точкам/Интервалы длительности полностью совпадают, оптимального решения нет.
 	travelLocationID = 4
 
-	// travelStateIdle 空闲可派出；travelStateTraveling 在途；travelStateArrived 到站可领奖。
-	travelStateIdle      = "idle"
+	// travelStateIdle Свободен — можно назначать;travelStateTraveling в пути;travelStateArrived По прибытии можно получить награду.
+	travelStateIdle = "idle"
 	travelStateTraveling = "traveling"
-	travelStateArrived   = "arrived"
+	travelStateArrived = "arrived"
 )
 
-// travelAccountDelay 账号间限速：全量账号约 40s，避免上游风控。测试可置 0。
+// travelAccountDelay Лимит между аккаунтами: всего аккаунтов около 40s，во избежание риск-контроля апстрима. Для теста можно установить 0。
 var travelAccountDelay = 800 * time.Millisecond
 
-// activityAccountDelay 活跃上报账号间限速：与旅行同口径，避免上游风控。测试可置 0。
+// activityAccountDelay межаккаунтный rate limit активного отчета: тот же критерий, что и для travel, во избежание риск-контроля апстрима. Для теста можно выставить 0。
 var activityAccountDelay = 800 * time.Millisecond
 
-// adoptReportGap 领养前置上报后的等待：给上游事件处理留时间再发 buddy/first。
-// 对齐 scripts/task_first_buddy.py 实测的 1.05s 间隔口径。测试可置 0。
+// adoptReportGap ожидание после пред-отчёта адопции: дать время на обработку события апстримом перед отправкой buddy/first。
+// Выравнивание scripts/task_first_buddy.py фактический 1.05s Интервал. В тестах можно установить 0。
 var adoptReportGap = 1050 * time.Millisecond
 
-// cstZone 上游每日重置按自然日 00:00 CST（Asia/Shanghai）。中国无夏令时，固定 +8 即可，
-// 不依赖容器 tzdata。
+// cstZone ежедневный сброс апстрима по календарным суткам 00:00 CST（Asia/Shanghai）。В Китае нет DST, время фиксированное +8 достаточно,
+// не зависит от контейнера tzdata。
 var cstZone = time.FixedZone("CST", 8*60*60)
 
-// travelDay 返回 t 所属的上游自然日（CST），格式 2006-01-02。
+// travelDay вернуть t относящийся к календарному дню апстрима (CST），формат 2006-01-02。
 func travelDay(t time.Time) string {
 	return t.In(cstZone).Format("2006-01-02")
 }
 
-// RunTravelNow 立即对池内所有可用账号执行一趟旅行巡检。
-// 禁用账号跳过；401/查询失败只跳过该账号本轮（不强刷 token，交 22:00 keepalive）；
-// 账号间限速 travelAccountDelay。
+// RunTravelNow Немедленно выполнить обходную проверку всех доступных аккаунтов в пуле.
+// Пропуск отключенных аккаунтов;401/Ошибка запроса — пропуск только этого аккаунта в текущем раунде (без принудительного обновления token，Передача 22:00 keepalive）；
+// rate-limit между аккаунтами travelAccountDelay。
 func (s *Scheduler) RunTravelNow() {
 	first := true
 	for _, st := range s.cfg.Pool.List() {
@@ -55,7 +55,7 @@ func (s *Scheduler) RunTravelNow() {
 			continue
 		}
 		if a.IsGlobal() {
-			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
+			continue // D4 Гейт:global отсутствует CN Система задач, без вызовов апстрима
 		}
 		if !first {
 			time.Sleep(travelAccountDelay)
@@ -65,7 +65,7 @@ func (s *Scheduler) RunTravelNow() {
 	}
 }
 
-// travelOne 单账号单趟状态机：查有无猫 + 查状态 + 最多一个动作，不轮询不等待。
+// travelOne Конечный автомат на аккаунт/поездку: проверка наличия кота + Проверить статус + максимум одно действие, без опроса и ожидания.
 func (s *Scheduler) travelOne(a *auth.Auth) {
 	buddy, err := s.cfg.Upstream.BuddyInfo(a)
 	if err != nil {
@@ -93,7 +93,7 @@ func (s *Scheduler) travelOne(a *auth.Auth) {
 	}
 }
 
-// travelDepart 空闲且未达当日上限时派出（每日 1 次，自然日 00:00 CST 重置）。
+// travelDepart Отправлять когда idle и не достиг дневного лимита (ежедневно 1 раз, календарный день 00:00 CST сброс).
 func (s *Scheduler) travelDepart(a *auth.Auth, ts *upstream.TravelState) {
 	if ts.DailyLimitReached {
 		log.Printf("travel %s: skip (daily limit reached)", logfmt.Label(a.UID, a.Nickname))
@@ -106,7 +106,7 @@ func (s *Scheduler) travelDepart(a *auth.Auth, ts *upstream.TravelState) {
 	log.Printf("travel %s: depart ok location=%d", logfmt.Label(a.UID, a.Nickname), travelLocationID)
 }
 
-// travelClaim 到站领奖（必须带 record_id）。
+// travelClaim Получение приза на станции (необходимо иметь record_id）。
 func (s *Scheduler) travelClaim(a *auth.Auth, ts *upstream.TravelState) {
 	if ts.RecordID == 0 {
 		log.Printf("travel %s: claim skipped (arrived but no record_id)", logfmt.Label(a.UID, a.Nickname))
@@ -120,22 +120,22 @@ func (s *Scheduler) travelClaim(a *auth.Auth, ts *upstream.TravelState) {
 	log.Printf("travel %s: claim ok record=%d reward=%d", logfmt.Label(a.UID, a.Nickname), ts.RecordID, reward)
 }
 
-// travelAdopt 无猫时领养，链路：report → agreement → buddy/first。
+// travelAdopt усыновление при отсутствии кота, цепочка:report → agreement → buddy/first。
 //
-// report 必须先跑（scripts/task_first_buddy.py 实测）：一条 chat_request_send 上报
-// 点亮 growth 连登并**解锁 first_buddy 任务**；未上报时 buddy/first 会返回
-// 400 "first_buddy task not completed yet"——该门槛的真实来源是"当日无活跃上报"，
-// 不是账号问题（report.go 注释亦明确「解锁 first_buddy 任务（领养前置）」）。
-// conversation 门槛未达标仍属预期行为，记一次当日已试后静默跳过，不再重试。
+// report Должен сначала выполниться (scripts/task_first_buddy.py фактически): одна chat_request_send Отчёт
+// Подсветить growth последовательный логин и**Разблокировать first_buddy задача**；когда не отправлено buddy/first вернёт
+// 400 "first_buddy task not completed yet«——реальный источник этого порога —«За сегодня нет отчета об активности"，
+// Не проблема аккаунта (report.go В комментарии также явно "разблокировать first_buddy задача (пререквизит адопшена)»).
+// conversation Недостижение порога — ожидаемое поведение, засчитать одну попытку за день, далее тихо пропускать без повтора.
 func (s *Scheduler) travelAdopt(a *auth.Auth) {
 	if s.adoptTriedToday(a.UID) {
 		return
 	}
-	// 前置：解锁 first_buddy 任务（幂等；失败不阻塞，让 buddy/first 按既有错误路径暴露）。
+	// Предусловие: разблокировка first_buddy Задача (идемпотентна; сбой не блокирует, пусть buddy/first отдаётся по существующему пути ошибок).
 	if err := s.cfg.Upstream.ReportChatActivity(a, fmt.Sprintf("wb2api-adopt-%d", time.Now().UnixMilli()), ""); err != nil {
 		log.Printf("travel %s: adopt preflight report: %v", logfmt.Label(a.UID, a.Nickname), err)
 	} else {
-		time.Sleep(adoptReportGap) // 给上游事件处理留时间（对齐脚本实测的 1.05s 间隔口径）
+		time.Sleep(adoptReportGap) // Дать время на обработку событий апстрима (выровнено по замерам скрипта 1.05s метрика интервала)
 	}
 	if err := s.cfg.Upstream.BuddyAgreement(a); err != nil {
 		log.Printf("travel %s: agreement: %v", logfmt.Label(a.UID, a.Nickname), err)
@@ -153,14 +153,14 @@ func (s *Scheduler) travelAdopt(a *auth.Auth) {
 	}
 }
 
-// adoptTriedToday 该账号当日是否已判定领养门槛未达。
+// adoptTriedToday Достиг ли этот аккаунт сегодня порога усыновления.
 func (s *Scheduler) adoptTriedToday(uid string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.adoptTried[uid] == travelDay(time.Now())
 }
 
-// markAdoptTried 记录该账号当日已尝试领养且未过门槛。
+// markAdoptTried Зафиксировать, что аккаунт сегодня пытался усыновить/получить и не прошел порог.
 func (s *Scheduler) markAdoptTried(uid string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

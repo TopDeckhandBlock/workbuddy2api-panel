@@ -1,13 +1,13 @@
-// Package panel 内嵌式 Web 管理面板：账号池总览、单号运维（解冻/禁用/签到/
-// 刷新余额/移除）、浏览器内 OAuth 添加账号（免重启热加载进池）、手动批量
-// 签到/保活，以及运行日志环形缓冲（镜像 log 包与 chat 表格日志）。
+// Package panel встроенный Web Админ-панель: обзор пула аккаунтов, обслуживание одного аккаунта (разморозка/Отключено/check-in/
+// Обновить баланс/удаление), внутри браузера OAuth добавление аккаунта (горячая загрузка в пул без рестарта), ручная пакетная
+// check-in/keepalive и кольцевой буфер логов выполнения (зеркало log Пакет и chat лог таблицы).
 //
-// 设计约束：
-//   - 前端 go:embed 单文件（index.html），无任何外部构建依赖，与二进制同体部署；
-//   - 鉴权复用网关 api_key（Bearer），与 /v1/* 同一口径；api_key 为空 = 不鉴权
-//     （仅本机/私网使用）。面板 HTML 本身无秘密，可匿名加载，密钥只发给 /panel/api/*；
-//   - 不改写既有池语义：所有运维操作落到 pool 已有入口（Revive/Disable/Remove...），
-//     添加账号走 auth.SaveAtomic + pool.Add，重启后与 auths/ 目录天然对齐。
+// Ограничения проектирования:
+// - Фронтенд go:embed Один файл (index.html），Без внешних зависимостей сборки, поставляется вместе с бинарём;
+// - шлюз с переиспользованием аутентификации api_key（Bearer），и /v1/* Единая метрика;api_key пусто = Без аутентификации
+// （только локально/использование в приватной сети). Панель HTML Сам по себе без секретов, доступна анонимная загрузка, ключ выдается только /panel/api/*；
+// - Не переопределять семантику существующего пула: все ops-операции применяются к pool уже есть вход (Revive/Disable/Remove...），
+// Добавление аккаунта через auth.SaveAtomic + pool.Add，После рестарта с auths/ Каталоги естественно выровнены.
 package panel
 
 import (
@@ -30,68 +30,68 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
 
-// Config 面板依赖（main 装配注入）。
+// Config Зависимость панели (main сборка/инъекция).
 type Config struct {
-	Pool      *pool.Pool
-	Upstream  *upstream.Client
-	Scheduler *scheduler.Scheduler // 手动触发签到/保活；nil 时对应接口返回 501
-	AuthDir   string               // OAuth 登录完成后凭证落盘目录
-	APIKey    string               // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
-	RedisMode string               // "upstash" / "noop"，仅观测透出
-	Version   string               // 面板版本号（展示用）
+	Pool *pool.Pool
+	Upstream *upstream.Client
+	Scheduler *scheduler.Scheduler // Ручной триггер чекина/keep-alive;nil при этом соответствующий интерфейс возвращает 501
+	AuthDir string // OAuth Каталог сохранения учётных данных после входа
+	APIKey string // пустой = Без аутентификации (семантика как у основного сервиса); с Live При одновременном указании Live Приоритет
+	RedisMode string // "upstash« / »noop"，только наблюдаемаяПрозрачная передача
+	Version string // Версия панели (для отображения)
 
-	// Live 运行期可变配置（在线改配置立即生效）。
+	// Live изменяемая в рантайме конфигурация (изменение онлайн применяется немедленно).
 	Live *livecfg.Holder
 
-	// ConfigPath config.json 路径与加载器（配置页读写用）。
-	// LoadConfig 返回解析后的配置对象（前端展示/校验用，具体类型由 main 注入的闭包决定）；
-	// nil 时配置页返回 501。
+	// ConfigPath config.json Путь и загрузчик (для чтения/записи страницы конфигурации).
+	// LoadConfig Возвращает распарсенный объект конфигурации (отображение на фронте/для проверки, конкретный тип определяется main определяется инжектированным замыканием);
+	// nil страница конфигурации возвращает 501。
 	ConfigPath string
 	LoadConfig func() (any, error)
-	// SaveConfig 校验并落盘配置，返回需要重启才能生效的字段列表；随后由 main 注入的
-	// ApplyConfig 闭包完成热生效（池参数/排程/密钥/脱敏）。error 时配置不写盘。
+	// SaveConfig Валидировать и сохранить конфигурацию на диск, вернуть список полей, требующих перезапуска; затем main Инжектированный
+	// ApplyConfig замыкание завершает горячее применение (параметры пула/Планирование/ключ/десенсибилизация).error конфиг не пишется на диск.
 	SaveConfig func(raw []byte) (restartRequired []string, err error)
 
-	// StickyCount 返回粘性会话绑定数；nil 时报告 0。
+	// StickyCount Возвращает кол-во привязок sticky-сессий;nil отчет по времени 0。
 	StickyCount func() int
 
-	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
+	// Usage рекордер расхода по запросам (nil = Ответ API квоты/расхода 501）。
 	Usage *usage.Recorder
-	// RequestLog 请求指标与归档（nil = 对应接口返回 501）。
+	// RequestLog Метрики запросов и архивация (nil = Соответствующий интерфейс возвращает 501）。
 	RequestLog *reqlog.Recorder
 
-	// ProbeFile 模型输出上限探测结果文件（scripts/probe_max_tokens.py --panel-out
-	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
-	// 只读展示：网关不解析、不依赖其内容做任何路由/出站决策。
+	// ProbeFile Файл результатов зондирования лимита вывода модели (scripts/probe_max_tokens.py --panel-out
+	// запись; пусто или файл отсутствует = model_probes эндпоинт вернул пустое множество, на панели не отображаются метки реальных измерений).
+	// Только для отображения: шлюз не парсит и не использует содержимое для маршрутизации/Решение об исходящем запросе.
 	ProbeFile string
 }
 
-// Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
-// 本 mux 的 pattern 均带 /panel 前缀（外层不做前缀剥离）。
+// Panel Панель управления handler。способ монтирования: внешний mux Handle("/panel/", panel)，
+// текущий mux pattern все с /panel Префикс (внешний слой не снимает префикс).
 type Panel struct {
-	cfg     Config
-	mux     *http.ServeMux
+	cfg Config
+	mux *http.ServeMux
 	started time.Time
-	logs    *Ring
+	logs *Ring
 
-	// logins 进行中的 OAuth 设备授权会话（state → 会话信息）。
-	// poll 成功或超时（loginTTL）后剔除；面板常驻进程，容量天然有界。
+	// logins в процессе OAuth Сессия авторизации устройства (state → информация о сессии).
+	// poll Успех или таймаут (loginTTL）после удаление; процесс панели постоянно живет, емкость естественно ограничена.
 	loginMu sync.Mutex
-	logins  map[string]loginSession
+	logins map[string]loginSession
 
-	// taskMu/taskLocks 一键完成任务的 per-account 互斥：同一账号的任务动作
-	// （单任务 / 全量）同时只允许一条在跑。重复点击直接返回 409"仍在执行"，
-	// 而不是并发跑两遍浪费上游请求（动作虽幂等，expert 系每遍含 8 次真实对话）。
-	// 不同账号之间不互斥（并行照旧）。TryLock 语义，锁条目常驻（账号数有界）。
-	taskMu    sync.Mutex
+	// taskMu/taskLocks задач в один клик per-account Мьютекс: действия задач одного аккаунта
+	// （одна задача / полный объем) одновременно только один запуск. Повторный клик сразу возвращает 409"всё ещё выполняется"，
+	// а не гонять параллельно дважды, тратя запросы к апстриму (хотя действие идемпотентно,expert система каждый проход содержит 8 реальных диалогов).
+	// Между разными аккаунтами не взаимоисключающе (параллель сохраняется).TryLock семантика, записи блокировок постоянны (кол-во аккаунтов ограничено).
+	taskMu sync.Mutex
 	taskLocks map[string]*sync.Mutex
 
-	// 任务中心执行队列（taskcenter.go）。
+	// Очередь исполнения центра задач (taskcenter.go）。
 	queueOnce sync.Once
-	q         *queueState
+	q *queueState
 }
 
-// tryLockAccount 尝试锁定账号的任务执行；已在执行返回 false。
+// tryLockAccount Попытка захвата блокировки задачи аккаунта; если уже выполняется — возврат false。
 func (p *Panel) tryLockAccount(uid string) bool {
 	p.taskMu.Lock()
 	if p.taskLocks == nil {
@@ -106,7 +106,7 @@ func (p *Panel) tryLockAccount(uid string) bool {
 	return mu.TryLock()
 }
 
-// unlockAccount 释放账号任务锁（与 tryLockAccount 配对）。
+// unlockAccount освободить лок задачи аккаунта (с tryLockAccount сопряжение).
 func (p *Panel) unlockAccount(uid string) {
 	p.taskMu.Lock()
 	mu := p.taskLocks[uid]
@@ -116,33 +116,33 @@ func (p *Panel) unlockAccount(uid string) {
 	}
 }
 
-// loginTTL 授权 URL 的最长有效期：超时的 state 直接回收，
-// 防止"开了添加账号弹窗就走开"的会话永久滞留。
+// loginTTL Авторизация URL максимальный срок действия: просроченный state прямая утилизация,
+// предотвратить"открыл окно добавления аккаунта и ушёл"сессия зависает навсегда.
 const loginTTL = 15 * time.Minute
 
-// loginSession 进行中的 OAuth 会话：创建时刻 + realm（cn/global，用于落盘与端点切换）。
+// loginSession в процессе OAuth Сессия: момент создания + realm（cn/global，для сохранения на диск и переключения эндпоинта).
 type loginSession struct {
 	created time.Time
-	realm   string // "cn" / "global"，缺省 cn
+	realm string // "cn« / »global"，по умолчанию cn
 }
 
-// New 构建面板。
+// New Панель сборки.
 func New(cfg Config) *Panel {
 	if cfg.RedisMode == "" {
 		cfg.RedisMode = "noop"
 	}
 	p := &Panel{
-		cfg:     cfg,
-		mux:     http.NewServeMux(),
+		cfg: cfg,
+		mux: http.NewServeMux(),
 		started: time.Now(),
-		logs:    NewRing(500),
-		logins:  map[string]loginSession{},
+		logs: NewRing(500),
+		logins: map[string]loginSession{},
 	}
 	p.routes()
 	return p
 }
 
-// Logs 返回日志环形缓冲（main 经 MultiWriter 镜像 log 与 chat 表格日志进来）。
+// Logs Возвращает кольцевой буфер логов (main Через MultiWriter Образ log и chat входят табличные логи).
 func (p *Panel) Logs() *Ring { return p.logs }
 
 func (p *Panel) routes() {
@@ -185,16 +185,16 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
 }
 
-// ServeHTTP 统一入口：先写安全响应头再分发，保证页面、静态资源、API
-// 与 401 错误响应全都带上（API 也可能在浏览器里被直接打开）。
+// ServeHTTP Единая точка входа: сначала записать безопасные заголовки ответа, затем диспетчеризация, гарантируя страницы, статические ресурсы,API
+// и 401 Все ответы с ошибкой содержат (API может быть также открыто напрямую в браузере).
 func (p *Panel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	p.mux.ServeHTTP(w, r)
 }
 
-// withAuth 与 server 包同口径的 Bearer 鉴权（经 httpauth 常量时间比较）；
-// api_key 为空时放行。密钥经 livecfg 快照读取：面板里改了 api_key，下一个请求
-// 即用新值（无需重启）。
+// withAuth и server в метрике того же пакета Bearer аутентификация (через httpauth сравнение за константное время);
+// api_key При пустом — пропуск. Ключ через livecfg Чтение снапшота: в панели изменено api_key，следующий запрос
+// Применять новое значение сразу (без перезапуска).
 func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !httpauth.VerifyBearer(r, p.apiKey()) {
@@ -205,7 +205,7 @@ func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// apiKey 当前生效密钥（Live 优先，回落静态字段）。
+// apiKey Текущий действующий ключ (Live Приоритет, откат к статическому полю).
 func (p *Panel) apiKey() string {
 	if p.cfg.Live != nil {
 		return p.cfg.Live.Load().APIKey
@@ -213,7 +213,7 @@ func (p *Panel) apiKey() string {
 	return p.cfg.APIKey
 }
 
-// expiringSoonWindow 返回调度器当前生效的快过期路由窗口；测试面板无调度器时返回 0。
+// expiringSoonWindow Возвращает текущее активное окно быстро истекающей маршрутизации планировщика; при отсутствии планировщика на тестовой панели возвращает 0。
 func (p *Panel) expiringSoonWindow() time.Duration {
 	if p.cfg.Scheduler == nil {
 		return 0
@@ -222,10 +222,10 @@ func (p *Panel) expiringSoonWindow() time.Duration {
 }
 
 // ---------------------------------------------------------------------------
-// 只读接口
+// Интерфейс только для чтения
 // ---------------------------------------------------------------------------
 
-// overview 总览：池计数 + 每账号状态 + 面板元信息。
+// overview Обзор: счётчики пула + Состояние каждого аккаунта + Метаинформация панели.
 func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	total, healthy, cooling, disabled, inFlightFull := p.cfg.Pool.CountsDetailed()
 	sticky := 0
@@ -233,26 +233,26 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		sticky = p.cfg.StickyCount()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":         p.cfg.Version,
-		"uptime_sec":      int(time.Since(p.started).Seconds()),
-		"auth_required":   p.apiKey() != "",
-		"redis_mode":      p.cfg.RedisMode,
+		"version": p.cfg.Version,
+		"uptime_sec": int(time.Since(p.started).Seconds()),
+		"auth_required": p.apiKey() != "",
+		"redis_mode": p.cfg.RedisMode,
 		"sticky_sessions": sticky,
-		"total":           total,
-		"healthy":         healthy,
-		"cooling":         cooling,
-		"disabled":        disabled,
-		"in_flight_full":  inFlightFull,
-		"accounts":        p.cfg.Pool.List(),
+		"total": total,
+		"healthy": healthy,
+		"cooling": cooling,
+		"disabled": disabled,
+		"in_flight_full": inFlightFull,
+		"accounts": p.cfg.Pool.List(),
 	})
 }
 
-// logsHandler 返回日志环形缓冲快照（时间升序，含频道标记 chat/task/sys）。
+// logsHandler возвращает снапшот кольцевого буфера логов (по возрастанию времени, с меткой канала chat/task/sys）。
 func (p *Panel) logsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"entries": p.logs.Snapshot()})
 }
 
-// requestMetrics 返回进程内请求指标、最近 100 条与归档状态。
+// requestMetrics возвращает внутрипроцессные метрики запросов, последние 100 записей и статуса архивации.
 func (p *Panel) requestMetrics(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.RequestLog == nil {
 		writeErr(w, http.StatusNotImplemented, "request logger not available")
@@ -261,10 +261,10 @@ func (p *Panel) requestMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p.cfg.RequestLog.Snapshot())
 }
 
-// requestLogs 从 JSONL 归档读取最近请求；limit 默认 200、最大 1000。
-// 支持按 outcome/account/model/client_ip/user_agent 过滤（字符串字段为包含匹配）
-// 与 from/to 时间区间（闭区间，unix 秒或 RFC3339）——面板「运行日志」的筛选框、
-// 来源查询与「今天 / 自定义区间」都走这里。
+// requestLogs Из JSONL архив читает последние запросы;limit По умолчанию 200、Максимум 1000。
+// Поддержка по outcome/account/model/client_ip/user_agent Фильтр (строковые поля — совпадение по вхождению)
+// и from/to Временной интервал (закрытый,unix с или RFC3339）——Фильтр "Журнал выполнения» панели,
+// запрос источника и "сегодня / пользовательский интервал» — всё идёт сюда.
 func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.RequestLog == nil {
 		writeErr(w, http.StatusNotImplemented, "request logger not available")
@@ -281,38 +281,38 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	rows, err := p.cfg.RequestLog.ReadArchive(limit, reqlog.Filter{
-		Outcome:   q.Get("outcome"),
-		Account:   q.Get("account"),
-		Model:     q.Get("model"),
-		ClientIP:  q.Get("client_ip"),
+		Outcome: q.Get("outcome"),
+		Account: q.Get("account"),
+		Model: q.Get("model"),
+		ClientIP: q.Get("client_ip"),
 		UserAgent: q.Get("user_agent"),
-		From:      parseTimeParam(q.Get("from")),
-		To:        parseTimeParam(q.Get("to")),
+		From: parseTimeParam(q.Get("from")),
+		To: parseTimeParam(q.Get("to")),
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 空结果回 []（而不是 JSON null）：前端把 null 与"归档关闭"混在一起会走错分支，
-	// 显示成不满足筛选条件的最近请求。
+	// Пустой результат возвр. []（а не JSON null）：фронтенд ... null и"Архивное закрытие"Смешивание уведет в неверную ветку,
+	// Отображать как последний запрос, не прошедший фильтр.
 	if rows == nil {
 		rows = []reqlog.Event{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": rows, "limit": limit})
 }
 
-// models 实时查询上游模型列表与 reasoning 实际档位（直连上游，不读路由层 1h 缓存）：
-// 回答"该模型到底支持哪几档思考"。顺带刷新 client 的 effort 降级能力缓存。
-// 与 /v1/models 同口径的双域输出：CN 域模型加 "cn:" 前缀、global 域加 "global:" 前缀
-// （gateway 路由协议，前端显示的 id 就是调用时要填的完整 model 值）。
-// 各域独立探测、独立容错：某域无可用账号则整域跳过；两域全空时才报错
-// （有错误明细回 502，一个账号都没有回 503）。
+// models запрос в реальном времени списка upstream-моделей и reasoning Фактический тариф (прямое обращение к апстриму, без чтения слоя маршрутизации 1h кэш):
+// Ответ"Какие уровни reasoning поддерживает данная модель"。попутное обновление client effort кэш capability downgrade.
+// и /v1/models Двухдоменный вывод в единой метрике:CN доменная модель + "cn:« Префикс,global домен плюс "global:" Префикс
+// （gateway протокол маршрутизации, отображаемый на фронтенде id это полный [параметр] для заполнения при вызове model значения).
+// независимый пробинг и отказоустойчивость по доменам: если в домене нет доступных аккаунтов — пропуск всего домена; ошибка только когда оба домена пусты
+// （вернуть детали ошибки 502，Ни один аккаунт не ответил 503）。
 func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0)
 	var fetchErrs []string
 
-	// CN 域：有可用 CN 账号才查（此前无条件 Pool.Pick()+FetchModels——选中 global
-	// 账号时打 CN 端点必然失败，混合池表现为偶发 502，纯 global 池必炸）。
+	// CN Домен: есть доступные CN проверять только аккаунт (ранее безусловно Pool.Pick()+FetchModels——Выбрано global
+	// при аккаунте ставить CN Эндпоинт неизбежно падает, в смешанном пуле — спорадически 502，Чистый global пул гарантированно упадет).
 	if uids := p.cfg.Pool.AvailableUIDsForRealm("cn"); len(uids) > 0 {
 		if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
 			infos, err := p.cfg.Upstream.FetchModels(acct)
@@ -326,14 +326,14 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// global 域：路由开关开且有可用 global 账号才查（独立目录端点，FetchGlobalModelInfos；
-	// Upstream.GlobalEnabled 是探测侧同一道闸，与 main 装配的 config global.enabled 一致）。
+	// global Домен: свитч маршрутизации вкл. и есть доступные global запрос по аккаунту только тогда (отдельный эндпоинт каталога,FetchGlobalModelInfos；
+	// Upstream.GlobalEnabled это один шлюз на стороне детекции, с main Собранный config global.enabled совпадает).
 	if p.cfg.Upstream.GlobalEnabled {
 		if uids := p.cfg.Pool.AvailableUIDsForRealm("global"); len(uids) > 0 {
 			if acct := p.cfg.Pool.AuthByUID(uids[0]); acct != nil {
 				infos := p.cfg.Upstream.FetchGlobalModelInfos(acct)
 				if len(infos) == 0 {
-					fetchErrs = append(fetchErrs, "global: 上游未返回可用模型")
+					fetchErrs = append(fetchErrs, "global: апстрим не вернул доступных моделей")
 				} else {
 					efforts, defaults := p.cfg.Upstream.GlobalEffortSnapshot()
 					for _, mi := range infos {
@@ -349,36 +349,36 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadGateway, "fetch models: "+strings.Join(fetchErrs, "; "))
 			return
 		}
-		writeErr(w, http.StatusServiceUnavailable, "没有可用账号：请先在面板添加账号再查询")
+		writeErr(w, http.StatusServiceUnavailable, "Нет доступных аккаунтов: сначала добавьте аккаунт в панели, затем запросите")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
 }
 
-// panelModelEntry 构造单个模型条目（两域共用）：id 带 realm 前缀（调用值即显示值），
-// context_length / max_output_tokens 走四级查找链，effort 档位按 realm 域取
-// EffortListing（远端权威 ∪ 静态兜底表）——与 /v1/models 同一口径，两侧不再漂移。
+// panelModelEntry сборка одной записи модели (общая для двух доменов):id Лента realm Префикс (значение вызова = отображаемое значение),
+// context_length / max_output_tokens Идти по 4-уровневой цепочке поиска,effort Тариф по realm Выборка по домену
+// EffortListing（Удалённый авторитетный источник ∪ статическая fallback-таблица) — с /v1/models Единая метрика, расхождение сторон устранено.
 func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string, remoteDefault string, httpc *http.Client) map[string]any {
 	entry := map[string]any{
-		"id":                   realm + ":" + mi.ID,
-		"name":                 mi.Name,
-		"default_effort":       mi.DefaultEffort,
-		"supported_efforts":    mi.Efforts,
+		"id": realm + ":" + mi.ID,
+		"name": mi.Name,
+		"default_effort": mi.DefaultEffort,
+		"supported_efforts": mi.Efforts,
 		"can_disable_thinking": mi.CanDisableThinking,
-		"supports_reasoning":   mi.SupportsReasoning,
-		"supports_images":      mi.SupportsImages,
-		"credits":              mi.Credits,
-		"description":          mi.Description,
-		"tags":                 mi.Tags,
-		"vendor":               mi.Vendor,
-		"is_default":           mi.IsDefault,
-		"supports_tool_call":   mi.SupportsToolCall,
-		"only_reasoning":       mi.OnlyReasoning,
-		"reasoning_effort":     mi.ReasoningEffort,
-		"reasoning_summary":    mi.ReasoningSummary,
+		"supports_reasoning": mi.SupportsReasoning,
+		"supports_images": mi.SupportsImages,
+		"credits": mi.Credits,
+		"description": mi.Description,
+		"tags": mi.Tags,
+		"vendor": mi.Vendor,
+		"is_default": mi.IsDefault,
+		"supports_tool_call": mi.SupportsToolCall,
+		"only_reasoning": mi.OnlyReasoning,
+		"reasoning_effort": mi.ReasoningEffort,
+		"reasoning_summary": mi.ReasoningSummary,
 	}
-	// 限时优惠（modelPromotions）：credits 是牌价，promo_* 是当前生效折扣
-	//（WorkBuddy 客户端显示的就是这个生效价）。前端据此显示「生效价+标签+划线牌价」。
+	// Ограниченное по времени предложение (modelPromotions）：credits котировка,promo_* — текущая действующая скидка
+	//（WorkBuddy клиент отображает именно эту действующую цену). Фронтенд на этом основании показывает "действующая цена+Тег+зачёркнутая цена».
 	if mi.PromoFactor != nil {
 		entry["promo_factor"] = *mi.PromoFactor
 		entry["promo_credits"] = mi.PromoCredits
@@ -405,12 +405,12 @@ func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string
 	return entry
 }
 
-// modelProbes 返回模型输出上限的探测结果（scripts/probe_max_tokens.py --panel-out
-// 写入的契约文件），供前端在「模型与档位」的实测列做风险标注。
+// modelProbes вернуть результат пробы лимита вывода модели (scripts/probe_max_tokens.py --panel-out
+// записываемый файл контракта), для пометки рисков фронтендом в колонке фактических замеров "модель и тариф».
 //
-// 设计边界：纯只读透传——文件缺失/未配置返回空集（面板退化为无标注，与历史行为
-// 一致），网关自身不解析字段语义、不据此做任何路由或出站决策；上游改了限制后
-// 重跑一次工具、下次查询即刷新，无需重启网关。
+// Граница проектирования: чистый read-only прокси — файл отсутствует/Не настроено — возврат пустого множества (панель деградирует без меток, совместимо с историческим поведением
+// совпадает), сам шлюз не парсит семантику полей и не принимает на её основе решений о маршрутизации или исходящих запросах; после изменения лимитов выше по цепочке
+// повторный прогон инструмента / следующий запрос обновит, перезапуск шлюза не требуется.
 func (p *Panel) modelProbes(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"probes": map[string]json.RawMessage{}, "exists": false}
 	if p.cfg.ProbeFile == "" {
@@ -427,8 +427,8 @@ func (p *Panel) modelProbes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var f struct {
-		Version int                        `json:"version"`
-		Probes  map[string]json.RawMessage `json:"probes"`
+		Version int `json:"version"`
+		Probes map[string]json.RawMessage `json:"probes"`
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
 		writeErr(w, http.StatusBadGateway, "parse probes: "+err.Error())
@@ -446,10 +446,10 @@ func (p *Panel) modelProbes(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// 账号运维
+// эксплуатация аккаунта
 // ---------------------------------------------------------------------------
 
-// accountRevive 手动复活：清禁用 + 冷却 + 熔断（运维口径无条件恢复）。
+// accountRevive Ручное восстановление: снять блокировку + Охлаждение + аварийный размыкатель (с точки зрения эксплуатации — безусловное восстановление).
 func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	if _, ok := p.cfg.Pool.Status(uid); !ok {
@@ -457,11 +457,11 @@ func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.cfg.Pool.Revive(uid)
-	log.Printf("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
+	log.Printf("panel: revive uid=%s（ручной сброс блокировки/Охлаждение/аварийный размыкатель)", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// accountDisable 人工禁用（不再参与选号，需面板 revive 或重登恢复）。
+// accountDisable ручное отключение (исключён из выбора, требуется панель revive или восстановление после повторного входа).
 func (p *Panel) accountDisable(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	if _, ok := p.cfg.Pool.Status(uid); !ok {
@@ -469,12 +469,12 @@ func (p *Panel) accountDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.cfg.Pool.Disable(uid, "manual disable (panel)")
-	log.Printf("panel: disable uid=%s（人工禁用）", uid)
+	log.Printf("panel: disable uid=%s（ручное отключение)", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// accountCheckin 单号签到：DailyCheckin + 余额查询解冻（已签到等业务错误不阻塞余额刷新），
-// 与 scheduler.RunCheckinNow 的单号语义一致。
+// accountCheckin чекин по одному номеру:DailyCheckin + Разморозка запроса баланса (бизнес-ошибки вроде уже отмечено не блокируют обновление баланса),
+// и scheduler.RunCheckinNow семантика одиночного номера консистентна.
 func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.cfg.Pool.AuthByUID(uid)
@@ -485,8 +485,8 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 	checkinMsg := ""
 	checkinDone := false
 	if err := p.cfg.Upstream.DailyCheckin(a); err != nil {
-		checkinMsg = err.Error() // "今天已签到"等业务错误照常查余额
-		// 幂等拒绝同样是「今日已签」，标记后按钮显示「已签」。
+		checkinMsg = err.Error() // "Сегодня уже отмечено"прочие бизнес-ошибки — проверка баланса штатно
+		// Идемпотентный отказ — тоже "сегодня уже отмечено», после флага кнопка показывает "Отмечено».
 		if upstream.IsAlreadyCheckin(err) {
 			p.cfg.Pool.NoteCheckinDone(uid)
 			checkinDone = true
@@ -513,7 +513,7 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// accountBalance 单号余额刷新：更新余额与到期快照，不触碰冷却状态。
+// accountBalance обновление баланса одного номера: обновить снапшот баланса и срока, не затрагивая состояние кулдауна.
 func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.cfg.Pool.AuthByUID(uid)
@@ -530,7 +530,7 @@ func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credits": remain, "credits_total": total})
 }
 
-// accountRemove 移除账号：先出池（立即落盘 state），再删 auth 文件。
+// accountRemove Удаление аккаунта: сначала исключить из пула (немедленная запись на диск state），затем удалить auth файл.
 func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.cfg.Pool.Remove(uid)
@@ -545,72 +545,72 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if fileMsg != "" {
-		log.Printf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
+		log.Printf("panel: remove uid=%s（auth Ошибка удаления файла: %s）", uid, fileMsg)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file_error": fileMsg})
 		return
 	}
-	log.Printf("panel: remove uid=%s（已出池并删除凭证文件）", uid)
+	log.Printf("panel: remove uid=%s（выведен из пула и файл учетных данных удален)", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---------------------------------------------------------------------------
-// 批量任务
+// Пакетные задачи
 // ---------------------------------------------------------------------------
 
-// checkinAll 手动触发全量签到（异步执行，进度看日志区/账号状态变化）。
+// checkinAll Ручной запуск полной регистрации (асинхронно, прогресс в зоне логов/изменение статуса аккаунта).
 func (p *Panel) checkinAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
 	go p.cfg.Scheduler.RunCheckinNow()
-	log.Printf("panel: 手动全量签到已触发（含猫猫旅行）")
+	log.Printf("panel: ручной полный check-in уже запущен (вкл. кошачье путешествие)")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
-// travelAll 手动触发全量猫猫旅行巡检（异步执行）。
+// travelAll ручной запуск полной проверки путешествий котиков (асинхронно).
 func (p *Panel) travelAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
 	go p.cfg.Scheduler.RunTravelNow()
-	log.Printf("panel: 手动全量旅行巡检已触发")
+	log.Printf("panel: ручной полный обход-проверка уже запущен")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
-// activityAll 手动触发全量活跃上报（异步执行；点亮连登 + 解锁领养前置）。
+// activityAll Ручной триггер полного отчёта активности (асинхронно; подсветить серию входов + предусловие разблокировки и принятия).
 func (p *Panel) activityAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
 	go p.cfg.Scheduler.RunActivityNow()
-	log.Printf("panel: 手动全量活跃上报已触发")
+	log.Printf("panel: Ручной полный отчёт об активности запущен")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
-// keepaliveAll 手动触发全量 token 保活（异步执行）。
+// keepaliveAll ручной триггер полного объема token keepalive (асинхронное выполнение).
 func (p *Panel) keepaliveAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
 	go p.cfg.Scheduler.RunKeepaliveNow()
-	log.Printf("panel: 手动全量保活已触发")
+	log.Printf("panel: Ручной полный keepalive уже запущен")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
-// balanceAll 手动全量刷新余额：并发查上游、写回池内 credits（含解冻语义），
-// 完成后返回——面板紧接着拉 overview 即是最新值。账号量小（个位数），
-// 同步等待（上限受短 RPC 超时约束）比"触发后盲刷"体验更确定。
+// balanceAll ручное полное обновление баланса: параллельный опрос апстрима, запись обратно в пул credits（включая семантику разморозки),
+// Возврат после завершения — панель сразу подтягивает overview — это актуальное значение. Аккаунтов мало (единицы),
+// Синхронное ожидание (лимит ограничен коротким RPC ограничение таймаута) чем"слепое обновление после триггера"Более предсказуемый опыт.
 func (p *Panel) balanceAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
 	p.cfg.Scheduler.RunBalanceRefreshNow()
-	log.Printf("panel: 手动全量余额刷新完成")
+	log.Printf("panel: Ручное полное обновление баланса завершено")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": p.cfg.Pool.List()})
 }
 
@@ -618,12 +618,12 @@ func (p *Panel) balanceAll(w http.ResponseWriter, r *http.Request) {
 // helpers
 // ---------------------------------------------------------------------------
 
-// usage 返回逐请求用量聚合。统计窗口三选一：
-//   - from/to（unix 秒）：显式区间，用于「今天」与「自定义」——区间由浏览器按
-//     本地时区算好再发，服务端时区与浏览器不一致时「今天」才不会被算错；
-//   - hours：滚动窗口（默认 72，上限 1440=60 天），卡片汇总/按域/按账号/按模型/
-//     时序**全部**按该窗口统计；显式 hours=0 表示全部历史（含 90 天前折叠出的日桶）；
-//   - 都不给：等同于 hours=72（保持旧调用方行为）。
+// usage Возвращает агрегацию расхода по запросам. Окно статистики — 3 варианта:
+// - from/to（unix с): явный интервал для "сегодня» и "пользовательский» — интервал формируется браузером по
+// Рассчитать в локальном часовом поясе перед отправкой, иначе "сегодня» будет рассчитано неверно при расхождении часовых поясов сервера и браузера;
+// - hours：Скользящее окно (по умолчанию 72，Верхний лимит 1440=60 дн.), сводка по карточкам/по домену/По аккаунту/по модели/
+// Последовательность**все**статистика по данному окну; явно hours=0 означает всю историю (включая 90 дневной бакет, свёрнутый N дней назад);
+// - ничего не выдавать: эквивалентно hours=72（сохранение поведения старого вызывающего).
 func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Usage == nil {
 		writeErr(w, http.StatusNotImplemented, "usage recorder not available")
@@ -644,7 +644,7 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 			win.Hours = 1440
 		}
 	}
-	// 昵称仅用于展示，取自池快照（不含任何凭证）。
+	// Никнейм только для отображения, берётся из снапшота пула (без учётных данных).
 	nicks := map[string]string{}
 	for _, s := range p.cfg.Pool.List() {
 		if s.Nickname != "" {
@@ -658,9 +658,9 @@ func (p *Panel) usage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p.cfg.Usage.SnapshotWindow(win, nicks, currentRate))
 }
 
-// parseTimeParam 解析时间查询参数：unix 秒（前端默认）或 RFC3339（便于手工调
-// 接口/写脚本）。空串与非法值都返回零值 = 该侧不设界，不报错——区间参数是可选
-// 增强，拼错一个 from 不该让整页用量打不开。
+// parseTimeParam разбор временных query-параметров:unix сек (по умолчанию фронтенда) или RFC3339（Для ручной отладки
+// Интерфейс/скрипта). Пустая строка и невалидные значения возвращают ноль = На этой стороне без ограничений, без ошибки — параметр интервала опционален
+// усиление, одна опечатка в from Не должно блокировать открытие всей страницы использования.
 func parseTimeParam(v string) time.Time {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -670,7 +670,7 @@ func parseTimeParam(v string) time.Time {
 		if n <= 0 {
 			return time.Time{}
 		}
-		// 兼容秒与毫秒（前端可能直接把 Date.now() 传上来）。
+		// Совместимость секунд и миллисекунд (фронтенд может напрямую Date.now() передано выше).
 		if n > 1e12 {
 			return time.UnixMilli(n)
 		}
@@ -685,7 +685,7 @@ func parseTimeParam(v string) time.Time {
 	return time.Time{}
 }
 
-// usageSave 立即把内存中的用量桶落盘（正常由后台 30s 防抖刷新负责）。
+// usageSave Немедленно сбросить бакет использования из памяти на диск (в норме фоном 30s отвечает debounce-обновление).
 func (p *Panel) usageSave(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Usage == nil {
 		writeErr(w, http.StatusNotImplemented, "usage recorder not available")
@@ -695,20 +695,20 @@ func (p *Panel) usageSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// packages 返回全部账号的积分包构成，供「积分构成」视图对比。
+// packages Возвращает состав пакетов баллов всех аккаунтов для сравнения в представлении "Состав баллов».
 //
-// 逐个账号向上游查（并发有上限，避免瞬时打满上游限流），失败只在对应账号上
-// 标 error，不影响其它账号——一个号 token 失效不该让整页空白。
+// Опрос апстрима по каждому аккаунту (лимит параллелизма, чтобы не упереться в лимит апстрима), ошибка только на соответствующем аккаунте
+// Метка error，Не влияет на другие аккаунты — один аккаунт token Истечение не должно оставлять всю страницу пустой.
 func (p *Panel) packages(w http.ResponseWriter, r *http.Request) {
 	accts := p.cfg.Pool.List()
 	type row struct {
-		UID      string                   `json:"uid"`
-		Nickname string                   `json:"nickname"`
-		Realm    string                   `json:"realm"`
-		Remain   int64                    `json:"remain"`
-		Size     int64                    `json:"size"`
+		UID string `json:"uid"`
+		Nickname string `json:"nickname"`
+		Realm string `json:"realm"`
+		Remain int64 `json:"remain"`
+		Size int64 `json:"size"`
 		Packages []upstream.CreditPackage `json:"packages"`
-		Error    string                   `json:"error,omitempty"`
+		Error string `json:"error,omitempty"`
 	}
 	out := make([]row, len(accts))
 
@@ -742,7 +742,7 @@ func (p *Panel) packages(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
-	// 余额降序：多的在前，便于和少的对比。
+	// Баланс по убыванию: большие впереди, удобно сравнивать с малыми.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Remain > out[j].Remain })
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
 }

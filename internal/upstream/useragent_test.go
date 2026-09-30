@@ -9,7 +9,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// uaCaptureTransport 记录出站请求的 User-Agent。
+// uaCaptureTransport Логирование исходящего запроса User-Agent。
 type uaCaptureTransport struct {
 	ua *string
 }
@@ -19,14 +19,14 @@ func (t uaCaptureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return jsonResp(200, `{"code":0}`), nil
 }
 
-// TestUserAgentDefaultEmptyKeepsClientUA 默认（UserAgent/client_name 空）行为：
-// chat/refresh 路径 UA=默认 WorkBuddy 三段式；billing 路径（report/travel/balance）
-// 单段 WorkBuddy/<ver>（对齐官方 banner 白名单头组，默认伪造桌面端指纹）；
-// 显式 client_name="SaaS" 才还原"billing 不设 UA"的旧行为。
+// TestUserAgentDefaultEmptyKeepsClientUA по умолчанию (UserAgent/client_name пусто) поведение:
+// chat/refresh путь UA=По умолчанию WorkBuddy Трехсегментный;billing путь (report/travel/balance）
+// один сегмент WorkBuddy/<ver>（выравнивание с официальным banner группа заголовков белого списка, по умолчанию подделка отпечатка десктопа);
+// Явно client_name="SaaS« только тогда восстановление«billing Не задано UA"Старое поведение.
 func TestUserAgentDefaultEmptyKeepsClientUA(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		call   func(c *Client) error
+		name string
+		call func(c *Client) error
 		wantUA string
 	}{
 		{
@@ -54,9 +54,9 @@ func TestUserAgentDefaultEmptyKeepsClientUA(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var ua string
 			c := &Client{
-				HTTP:          &http.Client{Transport: uaCaptureTransport{ua: &ua}},
-				ChatHTTP:      &http.Client{Transport: uaCaptureTransport{ua: &ua}},
-				ChatBaseCN:    "https://chat.example",
+				HTTP: &http.Client{Transport: uaCaptureTransport{ua: &ua}},
+				ChatHTTP: &http.Client{Transport: uaCaptureTransport{ua: &ua}},
+				ChatBaseCN: "https://chat.example",
 				BillingBaseCN: "https://billing.example",
 			}
 			if err := tc.call(c); err != nil {
@@ -69,8 +69,8 @@ func TestUserAgentDefaultEmptyKeepsClientUA(t *testing.T) {
 	}
 }
 
-// TestUserAgentOverrideAllOutbound 显式设置后 chat/billing/refresh 全路径覆盖。
-// 用 env 别名直接验证 fields 传输到 headers 的行为。
+// TestUserAgentOverrideAllOutbound После явной установки chat/billing/refresh полное покрытие путей.
+// использовать env Прямая проверка алиаса fields Передача в headers поведения.
 func TestUserAgentOverrideAllOutbound(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1", RefreshToken: "rt"}
 	ua := "WorkBuddy/9.9.9"
@@ -87,9 +87,9 @@ func TestUserAgentOverrideAllOutbound(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0}`), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		UserAgent:     ua,
+		UserAgent: ua,
 	}
 	// chat
 	if rc, status, _, err := c.ChatStream(a, []byte(`{"model":"deepseek-v4-flash","messages":[]}`), "", ChatMeta{}); status != 200 || err != nil {
@@ -109,7 +109,7 @@ func TestUserAgentOverrideAllOutbound(t *testing.T) {
 	}
 }
 
-// TestUserAgentOverrideBilling 余额/签到类 billing 请求同样覆盖。
+// TestUserAgentOverrideBilling Баланс/тип check-in billing Запрос также перекрывает.
 func TestUserAgentOverrideBilling(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	c := &Client{
@@ -119,16 +119,16 @@ func TestUserAgentOverrideBilling(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0,"data":{"response":{"data":{"accounts":[{"PackageName":"x","CycleCapacitySize":100,"CycleCapacityUsed":0}]}}}}`), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		UserAgent:     "CustomAgent/1",
+		UserAgent: "CustomAgent/1",
 	}
 	if _, _, err := c.UserResource(a); err != nil {
 		t.Errorf("userResource: %v", err)
 	}
 }
 
-// TestFetchModelsUsesConfiguredUA FetchModels 手工 Set UA 也走覆盖。
+// TestFetchModelsUsesConfiguredUA FetchModels Вручную Set UA Тоже идёт через перекрытие.
 func TestFetchModelsUsesConfiguredUA(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	c := &Client{
@@ -148,34 +148,34 @@ func TestFetchModelsUsesConfiguredUA(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0,"data":{"models":[{"id":"glm-5.2","name":"GLM","maxInputTokens":131072,"maxOutputTokens":8192,"reasoning":{"effort":"high","supportedEfforts":[]},"disabled":false}],"agents":[{"name":"cli","models":["glm-5.2"]}]}}`), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		UserAgent:     "FetchAgent/2",
+		UserAgent: "FetchAgent/2",
 	}
 	if _, err := c.FetchModels(a); err != nil {
 		t.Errorf("fetchModels: %v", err)
 	}
 }
 
-// --- A 段：UA 对齐官方 WorkBuddy 三段式 ---
+// --- A Сегмент:UA выравнивание с официальным WorkBuddy трехсегментный ---
 
 const (
-	defaultUAString      = "WorkBuddy/5.5.4 WorkBuddy/5.5.4 CLI/2.137.1"
-	explicitString       = "MyCustomAgent/3.1"
-	clientVerUAString    = "WorkBuddy/6.0.0 WorkBuddy/6.0.0 CLI/2.137.1"
-	billingUAWorkBuddy   = "WorkBuddy/5.5.4"
-	billingUACustomVer   = "WorkBuddy/6.0.0"
+	defaultUAString = "WorkBuddy/5.5.4 WorkBuddy/5.5.4 CLI/2.137.1"
+	explicitString = "MyCustomAgent/3.1"
+	clientVerUAString = "WorkBuddy/6.0.0 WorkBuddy/6.0.0 CLI/2.137.1"
+	billingUAWorkBuddy = "WorkBuddy/5.5.4"
+	billingUACustomVer = "WorkBuddy/6.0.0"
 	billingUAAgentString = "BillingAgent/1"
 )
 
-// TestUserAgentDefaultWorkBuddyShape 默认（无任何配置）聊天/刷新出站 UA =
-// 官方 WorkBuddy 三段式，旧值 `CLI/2.63.2 CodeBuddy/2.63.2` 已被对齐替换。
+// TestUserAgentDefaultWorkBuddyShape Чат по умолчанию (без конфигурации)/Обновление исходящего UA =
+// Официальный WorkBuddy Трехсегментный, старое значение `CLI/2.63.2 CodeBuddy/2.63.2` Уже заменено выравниванием.
 func TestUserAgentDefaultWorkBuddyShape(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	c := &Client{
-		HTTP:          &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
-		ChatHTTP:      &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
-		ChatBaseCN:    "https://chat.example",
+		HTTP: &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
+		ChatHTTP: &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
 	}
 	rc, status, _, err := c.ChatStream(a, []byte(`{"model":"deepseek-v4-flash","messages":[]}`), "", ChatMeta{})
@@ -190,7 +190,7 @@ func TestUserAgentDefaultWorkBuddyShape(t *testing.T) {
 	}
 }
 
-// chatLastUA 从最近一次聊天请求捕获 UA（当前测试 Client 的 ChatHTTP transport 记录）。
+// chatLastUA Захват из последнего запроса чата UA（текущий тест Client ChatHTTP transport запись).
 func (c *Client) chatLastUA() string {
 	if t, ok := c.ChatHTTP.Transport.(uaCaptureTransport); ok && t.ua != nil {
 		return *t.ua
@@ -198,7 +198,7 @@ func (c *Client) chatLastUA() string {
 	return ""
 }
 
-// TestUserAgentExplicitOverride config user_agent 非空时以用户显式值为准（兼容旧覆盖逻辑）。
+// TestUserAgentExplicitOverride config user_agent При непустом значении приоритет у явно заданного пользователем (совм. со старой логикой перезаписи).
 func TestUserAgentExplicitOverride(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1", RefreshToken: "rt"}
 	c := &Client{
@@ -208,10 +208,10 @@ func TestUserAgentExplicitOverride(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0,"data":{"accessToken":"nat","refreshToken":"nrt"}}`), nil
 		})},
-		ChatHTTP:      &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
-		ChatBaseCN:    "https://chat.example",
+		ChatHTTP: &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		UserAgent:     explicitString,
+		UserAgent: explicitString,
 	}
 	if rc, status, _, err := c.ChatStream(a, []byte(`{"model":"deepseek-v4-flash","messages":[]}`), "", ChatMeta{}); status != 200 || err != nil {
 		t.Errorf("chat: status=%d err=%v", status, err)
@@ -226,14 +226,14 @@ func TestUserAgentExplicitOverride(t *testing.T) {
 	}
 }
 
-// TestUserAgentClientVersionOverride config client_version 生效：UA 的 WorkBuddy 段跟随
-// 且成对相同（platform 段 = applicationName 段），CLI 段保持默认。
+// TestUserAgentClientVersionOverride config client_version вступает в силу:UA WorkBuddy Сегмент следует
+// и попарно совпадают (platform Сегмент = applicationName сегмент),CLI сегмент остаётся по умолчанию.
 func TestUserAgentClientVersionOverride(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	c := &Client{
-		HTTP:          &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
-		ChatHTTP:      &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
-		ChatBaseCN:    "https://chat.example",
+		HTTP: &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
+		ChatHTTP: &http.Client{Transport: uaCaptureTransport{ua: new(string)}},
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
 		ClientVersion: "6.0.0",
 	}
@@ -249,11 +249,11 @@ func TestUserAgentClientVersionOverride(t *testing.T) {
 	}
 }
 
-// TestBillingUA_WhenClientNameSet billing/checkin 路径：client_name 非空时用单段
-// `WorkBuddy/<clientVersion>`（不带 CLI 段，对齐官方 banner/check-in 显式头组）。
+// TestBillingUA_WhenClientNameSet billing/checkin Путь:client_name если непусто — использовать один сегмент
+// `WorkBuddy/<clientVersion>`（без CLI сегмент, выравнивание с официальным banner/check-in явная группа заголовков).
 func TestBillingUA_WhenClientNameSet(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
-	// 默认 client_version → WorkBuddy/5.5.4
+	// По умолчанию client_version → WorkBuddy/5.5.4
 	c := &Client{
 		HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			if got := r.Header.Get("User-Agent"); got != billingUAWorkBuddy {
@@ -261,14 +261,14 @@ func TestBillingUA_WhenClientNameSet(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0,"data":{"response":{"data":{"accounts":[{"PackageName":"x","CycleCapacitySize":100,"CycleCapacityUsed":0}]}}}}`), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		ClientName:    "WorkBuddy",
+		ClientName: "WorkBuddy",
 	}
 	if _, _, err := c.UserResource(a); err != nil {
 		t.Errorf("userResource: %v", err)
 	}
-	// 自定义 client_version → WorkBuddy/6.0.0
+	// Пользовательский client_version → WorkBuddy/6.0.0
 	c2 := &Client{
 		HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			if got := r.Header.Get("User-Agent"); got != billingUACustomVer {
@@ -276,15 +276,15 @@ func TestBillingUA_WhenClientNameSet(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0,"data":{"response":{"data":{"accounts":[{"PackageName":"x","CycleCapacitySize":100,"CycleCapacityUsed":0}]}}}}`), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		ClientName:    "WorkBuddy",
+		ClientName: "WorkBuddy",
 		ClientVersion: "6.0.0",
 	}
 	if _, _, err := c2.UserResource(a); err != nil {
 		t.Errorf("userResource v2: %v", err)
 	}
-	// 显式 user_agent 仍优先于 billingUA
+	// Явно user_agent Всё ещё приоритетнее billingUA
 	c3 := &Client{
 		HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 			if got := r.Header.Get("User-Agent"); got != billingUAAgentString {
@@ -292,18 +292,18 @@ func TestBillingUA_WhenClientNameSet(t *testing.T) {
 			}
 			return jsonResp(200, `{"code":0,"data":{"response":{"data":{"accounts":[{"PackageName":"x","CycleCapacitySize":100,"CycleCapacityUsed":0}]}}}}`), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
-		ClientName:    "WorkBuddy",
-		UserAgent:     billingUAAgentString,
+		ClientName: "WorkBuddy",
+		UserAgent: billingUAAgentString,
 	}
 	if _, _, err := c3.UserResource(a); err != nil {
 		t.Errorf("userResource v3: %v", err)
 	}
 }
 
-// TestBillingUA_WhenClientNameEmpty client_name 空 = 默认对齐官方桌面端：
-// billing UA 单段 WorkBuddy/<clientVersion>；显式 client_name="SaaS" 才不设 UA。
+// TestBillingUA_WhenClientNameEmpty client_name пустой = По умолчанию как в официальном десктоп-клиенте:
+// billing UA один сегмент WorkBuddy/<clientVersion>；Явно client_name="SaaS" Не задавать UA。
 func TestBillingUA_WhenClientNameEmpty(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	var ua string
@@ -313,7 +313,7 @@ func TestBillingUA_WhenClientNameEmpty(t *testing.T) {
 			ua = r.Header.Get("User-Agent")
 			return jsonResp(200, fullResp), nil
 		})},
-		ChatBaseCN:    "https://chat.example",
+		ChatBaseCN: "https://chat.example",
 		BillingBaseCN: "https://billing.example",
 		ClientVersion: "6.0.0",
 	}
@@ -326,7 +326,7 @@ func TestBillingUA_WhenClientNameEmpty(t *testing.T) {
 	if got := c.billingUA(); got != "WorkBuddy/6.0.0" {
 		t.Errorf("billingUA() = %q want WorkBuddy/6.0.0", got)
 	}
-	// 显式 SaaS 还原旧行为（不设 UA）。
+	// Явно SaaS Восстановить старое поведение (без установки UA）。
 	c.ClientName = "SaaS"
 	if got := c.billingUA(); got != "" {
 		t.Errorf("billingUA() SaaS = %q want empty", got)

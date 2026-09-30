@@ -10,8 +10,8 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// TestReportDesktopEventFingerprint 断言桌面指纹上报：走 chatBase、UA 为桌面形状、
-// 事件数组自动注入 workbuddy-desktop 公共指纹（覆盖同名业务键）。
+// TestReportDesktopEventFingerprint Assert отчета отпечатка десктопа: через chatBase、UA Для формы рабочего стола,
+// Авто-инъекция массива событий workbuddy-desktop Общий fingerprint (перекрывает одноименные бизнес-ключи).
 func TestReportDesktopEventFingerprint(t *testing.T) {
 	var got []map[string]any
 	var gotUA string
@@ -60,15 +60,15 @@ func TestReportDesktopEventFingerprint(t *testing.T) {
 		t.Errorf("userNickname=%v want RenJie", ev["userNickname"])
 	}
 	if ev["mode"] != "craft" {
-		t.Errorf("业务字段 mode=%v 被指纹覆盖或缺失", ev["mode"])
+		t.Errorf("бизнес-поле mode=%v перекрыто отпечатком или отсутствует", ev["mode"])
 	}
-	// machineId 应为 uid 稳定派生（36 hex）。
+	// machineId Должно быть uid стабильное наследование (36 hex）。
 	if len(ev["machineId"].(string)) != 36 {
-		t.Errorf("machineId 长度=%d want 36", len(ev["machineId"].(string)))
+		t.Errorf("machineId Длина=%d want 36", len(ev["machineId"].(string)))
 	}
 }
 
-// TestDesktopChatSequenceShape 断言完整对话事件链的事件码顺序与关键字段。
+// TestDesktopChatSequenceShape Проверяет порядок кодов событий и ключевые поля полной цепочки событий диалога.
 func TestDesktopChatSequenceShape(t *testing.T) {
 	events := DesktopChatSequence("conv-1", "req-1", "msg-1", "fast-model", "fast-model")
 	wantCodes := []string{
@@ -85,7 +85,7 @@ func TestDesktopChatSequenceShape(t *testing.T) {
 	}
 	resp := events[3]
 	if resp["isSuccessful"] != true {
-		t.Errorf("chat_message_response.isSuccessful=%v want true（RichMeow 判据）", resp["isSuccessful"])
+		t.Errorf("chat_message_response.isSuccessful=%v want true(RichMeow критерий)", resp["isSuccessful"])
 	}
 	if resp["finishReason"] != "stop" {
 		t.Errorf("finishReason=%v want stop", resp["finishReason"])
@@ -95,7 +95,7 @@ func TestDesktopChatSequenceShape(t *testing.T) {
 	}
 }
 
-// TestSetAppearanceTheme 断言主题设置端点形状（点亮 Hp_Appearance 的 API）。
+// TestSetAppearanceTheme Ассерт формы эндпоинта настроек темы (подсветка Hp_Appearance API）。
 func TestSetAppearanceTheme(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

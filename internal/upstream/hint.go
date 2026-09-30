@@ -1,12 +1,12 @@
-// hint.go 网关错误附加说明字段（error.gateway_hint）的单一事实来源。
+// hint.go Доп. поле описания ошибки шлюза (error.gateway_hint）Единственный источник истины.
 //
-// 纪律（任务书 gateway-hint）：
-//   - error.message 永远是上游 body 原文透传（5755fe3 透传原则不动）；
-//     gateway_hint 只做与 message **并列**的网关视角补充说明，绝不替换/包装 message。
-//   - 文案集中在本文件（一张 Kind 表 + 11133/11135 形态判定），按 ErrKind + 上下文
-//     （请求带图/模型目录能力）映射，不散落 handler 的 if-else。
-//   - 未覆盖形态返回空串 → 响应不带该字段（不编造）。
-//   - hint 措辞是英文（错误响应面向客户端工具链，英文是通用口径）。
+// дисциплина (техзадание gateway-hint）：
+// - error.message всегда апстрим body Прозрачная передача оригинала (5755fe3 принцип сквозной передачи без изменений);
+// gateway_hint Делать только с message **Параллельно**доп. пояснение с точки зрения шлюза, никогда не заменяет/Обёртка message。
+// - Тексты сосредоточены в этом файле (один Kind таблица + 11133/11135 определение формы), по ErrKind + Контекст
+// （запрос с изображением/сопоставление capabilities каталога моделей), без распыления handler if-else。
+// - Для непокрытых форм возвращать пустую строку → ответ без этого поля (не выдумывать).
+// - hint Формулировка на английском (ошибки ориентированы на клиентский toolchain, английский — общий стандарт).
 package upstream
 
 import (
@@ -15,30 +15,30 @@ import (
 	"strings"
 )
 
-// GatewayHint 按错误形态返回网关视角的补充说明（error.gateway_hint 字段值）。
-// msg 是上游错误 body 原文（或 SSE error 帧 payload）；kind 是权威分类
-// （Classify / *Error 信封）。返回空串 = 未覆盖形态，调用方不带字段。
+// GatewayHint Возвращать доп. пояснение со стороны шлюза по типу ошибки (error.gateway_hint значение поля).
+// msg это ошибка upstream body оригинал (или SSE error Кадр payload）；kind является авторитетной классификацией
+// （Classify / *Error конверт). Вернуть пустую строку = непокрытая форма, вызывающая сторона не передаёт поле.
 //
-// ctx 携带判定 hint 所需的请求侧上下文（零值合法，信息缺失时相关形态退为中性
-// hint 或无 hint）：
-//   - HasImage：请求体是否携带 image_url part（11133 的「模型不支持图片」指向前提）；
-//   - Model / ModelInCatalog / ModelSupportsImages：模型目录对该模型的
-//     supports_images 声明（目录未收录 → 不做「不支持」判定，防查不到误判成不支持）。
+// ctx с передачей решения hint требуемый контекст на стороне запроса (нулевое значение валидно, при отсутствии данных связанная форма откатывается к нейтральной
+// hint или отсутствует hint）：
+// - HasImage：содержит ли тело запроса image_url part（11133 "модель не поддерживает изображения» указывает на предусловие);
+// - Model / ModelInCatalog / ModelSupportsImages：Каталог моделей для этой модели
+// supports_images заявление (каталог не содержит → не выносить решение "не поддерживается», чтобы отсутствие данных не считалось неподдержкой).
 //
-// 判定次序：11133/11135 上游业务码**先于** Kind 表——实测这两族归 ErrClient/
-// ErrBadParams 皆有可能（Classify 词表不含 11133），hint 层自带判定（hint 是补充
-// 说明非权威分类，误判代价只是多一条中性补充说明）；其余走 Kind 一对一映射。
+// Порядок проверки:11133/11135 бизнес-код апстрима**До** Kind таблица — фактически эти два семейства относятся к ErrClient/
+// ErrBadParams всё возможно (Classify словарь не содержит 11133），hint Уровень со встроенной проверкой (hint является дополнением
+// указывает на неавторитетную классификацию, цена ошибки — лишь одно доп. нейтральное пояснение); остальное по Kind Отображение один к одному.
 func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
-	// 11133 model_param_invalid 家族（图片回归实测：不支持图片的模型传图，或任意
-	// 参数被模型供应商拒绝）。只有请求确实带图、且目录能对该模型做出「不支持图片」
-	// 的判定时才给「换模型」指向，否则退中性参数形态（可能是任意参数问题，不点名图片）。
+	// 11133 model_param_invalid семейство (регресс-тест изображений: передача изображения модели без поддержки изображений, или любая
+	// параметр отклонен провайдером модели). Только если запрос действительно с изображением и каталог может выдать для этой модели "изображения не поддерживаются»
+	// только при таком решении давать подсказку "смените модель», иначе — нейтральная форма параметра (возможно любая проблема с параметрами, без указания на изображение).
 	if isModelParamInvalid(msg) {
 		if ctx.HasImage && ctx.ModelInCatalog && !ctx.ModelSupportsImages {
 			return "model " + ctx.Model + " does not support images; pick one with supports_images=true from /v1/models"
 		}
 		return "request parameters were rejected by the model provider; check message format and model capabilities"
 	}
-	// 11135 invalid_image_data 家族（图片数据无效，Discussion #77 实测形态）。
+	// 11135 invalid_image_data Семейство (данные изображения невалидны,Discussion #77 фактическая форма).
 	if isInvalidImageData(msg) {
 		return "image data rejected by upstream; use a real/valid image, may need a new conversation"
 	}
@@ -48,8 +48,8 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	case ErrImageInvalid:
 		return "image request was rejected by upstream; check image_url format and image data"
 	case ErrWafBlock:
-		// 账号级 WAF 403 与 IP 级 fail-fast 同 hint：两者对客户端的动作一致
-		// （等待窗口过去再试，换号/立刻重试无意义）。
+		// Уровень аккаунта WAF 403 и IP Уровень fail-fast Совм. hint：действия обоих для клиента идентичны
+		// （ждать окна и повторить, сменить аккаунт/немедленный ретрай бессмыслен).
 		return "upstream WAF blocked the gateway; retry after the block window"
 	case ErrSoftRate:
 		return "rate limited by upstream; retry after reset"
@@ -62,34 +62,34 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	case ErrModelBlocked:
 		return "upstream has no such model on this backend; switch model or retry on another account"
 	case ErrContentBlocked:
-		// 措辞不含 "upstream"：content_blocked 响应有不含上游字样的既有口径
-		// （handler_test 的泄漏守卫），hint 遵守同一口径。
+		// формулировка без "upstream"：content_blocked В ответе есть существующая метрика без упоминания upstream
+		// （handler_test сторожа утечек),hint Соблюдается единый критерий.
 		return "request content was rejected by content policy; adjust the prompt and retry"
 	default:
-		// ErrNone/ErrNotFound/ErrServer/ErrBadParams/ErrClient 等未覆盖形态：无 hint。
+		// ErrNone/ErrNotFound/ErrServer/ErrBadParams/ErrClient и др. непокрытые формы: отсутствует hint。
 		return ""
 	}
 }
 
-// HintContext gateway_hint 判定所需的请求侧上下文（handler 侧组装，见
-// Handler.hintContext）。零值合法。
+// HintContext gateway_hint контекст на стороне запроса для решения (handler Сборка на стороне, см.
+// Handler.hintContext）。Нулевое значение допустимо.
 type HintContext struct {
-	Model               string // 请求裸模型名（可空）
-	HasImage            bool   // 请求体是否携带 image_url part
-	ModelSupportsImages bool   // 模型目录 supports_images 声明（仅 ModelInCatalog 时有意义）
-	ModelInCatalog      bool   // 模型目录是否收录该模型（「不支持」判定的前提）
+	Model string // Запрос: чистое имя модели (опционально)
+	HasImage bool // содержит ли тело запроса image_url part
+	ModelSupportsImages bool // Каталог моделей supports_images Объявление (только ModelInCatalog имеет смысл при )
+	ModelInCatalog bool // Есть ли модель в каталоге моделей (условие для вердикта "не поддерживается")
 }
 
-// noHealthyHint 本地调度类错误（池中无健康号可用/传输层抖动，无上游原文可透传）
-// 的固定 hint。不进 GatewayHint：它没有 ErrKind，是网关自己的调度事实。
+// noHealthyHint Ошибка локального диспетчера (в пуле нет доступных healthy номеров/джиттер транспортного уровня, нет исходного текста апстрима для проброса)
+// фиксированный для hint。не входит GatewayHint：у него нет ErrKind，Это факт диспетчеризации самого шлюза.
 const noHealthyHint = "no healthy account available in pool; check /status or retry later"
 
-// NoHealthyAccountHint 本地调度错误的 gateway_hint（与 no_healthy_account code 配套）。
+// NoHealthyAccountHint Ошибка локального планирования gateway_hint（и no_healthy_account code в комплекте).
 func NoHealthyAccountHint() string { return noHealthyHint }
 
-// FrameHintFunc 返回 SSE error 帧的 gateway_hint 判定函数（Stream 的可选参数）。
-// ctxFn 惰性求值：仅在实际撞到 error 帧才调用（正常流零开销，模型目录查询
-// 不会为每个成功请求触发）。
+// FrameHintFunc вернуть SSE error кадра gateway_hint Функция проверки (Stream опциональный параметр).
+// ctxFn Ленивое вычисление: только при фактическом столкновении с error вызывается только на кадре (нулевые накладные расходы в норм. потоке, запрос каталога моделей
+// не срабатывает на каждый успешный запрос).
 func FrameHintFunc(ctxFn func() HintContext) func(string) string {
 	return func(payload string) string {
 		if payload == "" || payload == "[DONE]" {
@@ -99,9 +99,9 @@ func FrameHintFunc(ctxFn func() HintContext) func(string) string {
 	}
 }
 
-// FrameKind 从 SSE error 帧 payload 判定 ErrKind：6004 模型级限流的流式形态
-// （IsModelRateLimit 对帧 JSON 直接命中）优先；其余取帧内 error.message 走
-// Classify（请求级 400 口径）。判不出 → ErrNone（无 hint）。
+// FrameKind Из SSE error Кадр payload решение ErrKind：6004 потоковая форма лимитирования на уровне модели
+// （IsModelRateLimit по кадрам JSON прямое попадание) приоритет; остальное — внутри кадра error.message Ход
+// Classify（Уровень запроса 400 метрика). не распознаётся → ErrNone（отсутствует hint）。
 func FrameKind(payload string) ErrKind {
 	if IsModelRateLimit(payload) {
 		return ErrSoftRate
@@ -117,9 +117,9 @@ func FrameKind(payload string) ErrKind {
 	return Classify(http.StatusBadRequest, f.Error.Message)
 }
 
-// isModelParamInvalid 上游 11133 body 判定（code 11133 / extError.code=
-// model_param_invalid / msg 文案家族）。子串口径：hint 是补充说明非权威分类，
-// 宁宽勿漏。
+// isModelParamInvalid апстрим 11133 body оценка (code 11133 / extError.code=
+// model_param_invalid / msg Семейство текстов). Критерий по подстроке:hint это доп. пояснение, неавторитетная классификация,
+// Лучше шире, чем пропустить.
 func isModelParamInvalid(body string) bool {
 	lower := strings.ToLower(body)
 	return codeMarker(lower, "11133") ||
@@ -128,8 +128,8 @@ func isModelParamInvalid(body string) bool {
 		strings.Contains(lower, "request parameters do not meet the current model requirements")
 }
 
-// isInvalidImageData 上游 11135 body 判定（code 11135 / invalid_image_data /
-// "replace the image" msg 家族）。
+// isInvalidImageData апстрим 11135 body оценка (code 11135 / invalid_image_data /
+// "replace the image" msg семейство).
 func isInvalidImageData(body string) bool {
 	lower := strings.ToLower(body)
 	return codeMarker(lower, "11135") ||
@@ -137,8 +137,8 @@ func isInvalidImageData(body string) bool {
 		strings.Contains(lower, "replace the image")
 }
 
-// codeMarker JSON code 字段命中（`"code":N` / `"code": N` / `"code":"N"` 形态，
-// 与 IsModelBlocked 的 code 判定同容差口径）。lower 须为小写 body。
+// codeMarker JSON code попадание по полю (`"code":N` / `«code": N` / `«code":«N"` форма,
+// и IsModelBlocked code оценка по тому же допуску).lower должно быть в нижнем регистре body。
 func codeMarker(lower, code string) bool {
 	for _, v := range []string{`"code":` + code, `"code": ` + code, `"code":"` + code + `"`, `"code": "` + code + `"`, `"code":" ` + code + `"`, `"code": '` + code + `'`} {
 		if strings.Contains(lower, v) {

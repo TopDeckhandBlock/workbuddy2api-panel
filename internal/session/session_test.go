@@ -10,13 +10,13 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
 )
 
-// countingStore 记录镜像调用次数的假 Store（不联网）。
+// countingStore фейк подсчета вызовов зеркала Store（без сети).
 type countingStore struct {
 	redisstore.Noop
-	mu       sync.Mutex
+	mu sync.Mutex
 	setBinds int
 	delBinds int
-	binds    map[string]string
+	binds map[string]string
 }
 
 func newCountingStore() *countingStore {
@@ -47,19 +47,19 @@ func (c *countingStore) LoadBinds() map[string]string {
 
 func routerWith(store redisstore.Store, avail []string, ttl time.Duration) *Router {
 	return New(Config{
-		TTL:       ttl,
-		Store:     store,
+		TTL: ttl,
+		Store: store,
 		Available: func() []string { return avail },
 	})
 }
 
 func TestWeightedVirtualCandidatesBiasNewSessions(t *testing.T) {
 	st := newCountingStore()
-	// 一个普通账号 1 个虚拟实例，一个快过期账号 3 个虚拟实例。
+	// обычный аккаунт 1 виртуальных инстансов, один аккаунт с истекающим сроком 3 виртуальных инстансов.
 	r := routerWith(st, []string{"regular", "expiring", "expiring", "expiring"}, time.Minute)
 
-	// 先让每个真实账号都已有绑定，确保后续新会话进入全池哈希阶段，而不是
-	// 被“未绑定账号优先”规则逐个填满。这样可以直接验证虚拟实例权重。
+	// Сначала привязать каждый реальный аккаунт, чтобы последующие новые сессии вошли в фазу хеширования всего пула, а не
+	// Получено“приоритет непривязанным аккаунтам”Правила заполняются по очереди. Так можно напрямую проверить вес виртуального инстанса.
 	r.Bind("warm-regular", "regular")
 	r.Bind("warm-expiring", "expiring")
 
@@ -101,7 +101,7 @@ func TestTTLExpiryReassigns(t *testing.T) {
 	if !ok {
 		t.Fatal("resolve after expiry should still succeed")
 	}
-	// 过期后可重新分配（可能巧合同号，但至少返回有效账号）。
+	// После истечения можно перераспределить (возможно совпадение номера, но вернется валидный аккаунт).
 	_ = u1
 	_ = u2
 	if r.Count() != 1 {
@@ -115,7 +115,7 @@ func TestBoundAccountCooldownReassigns(t *testing.T) {
 	if u1 != "a1" {
 		t.Fatalf("initial bind=%s want a1", u1)
 	}
-	// a1 冷却 → 可用列表只剩 a2 → 重新分配必须换到 a2。
+	// a1 Охлаждение → В списке доступных осталось только a2 → перераспределение обязательно на a2。
 	r.cfg.Available = func() []string { return []string{"a2"} }
 	u2, ok := r.Resolve("c1")
 	if !ok {
@@ -130,7 +130,7 @@ func TestBoundAccountCooldownReassigns(t *testing.T) {
 }
 
 func TestNoSessionKeyPassthrough(t *testing.T) {
-	// ExtractKey 找不到任何会话键 → 空串（调用方据空串走普通 Pick；router 不会被调用）。
+	// ExtractKey ключи сессии не найдены → Пустая строка (вызывающая сторона по пустой строке идёт по обычному Pick；router не будет вызван).
 	got := ExtractKey([]byte(`{"model":"x","messages":[]}`))
 	if got != "" {
 		t.Errorf("ExtractKey should return empty, got %q", got)
@@ -142,19 +142,19 @@ func TestExtractKeyPriority(t *testing.T) {
 		body string
 		want string
 	}{
-		{`{"metadata":{"conversation_id":"mc","user_id":"mu"},"conversation_id":"top"}`, "mc"}, // metadata.conversation_id 优先
-		{`{"conversation_id":"top"}`, "top"},                                                   // 顶层 conversation_id
-		{`{"metadata":{"user_id":"mu"}}`, ""},                                                  // user_id 已剔除粘性键（粒度过粗），回落轮换
-		{`{"metadata":{"conversation_id":123}}`, ""},                                           // 非字符串 → 空
-		{`not-json`, ""}, // 非法 JSON → 空
-		// issue #35：客户端实际发 camelCase conversationId，ExtractKey 必须识别。
-		{`{"conversationId":"abc"}`, "abc"},                                            // 顶层 camelCase
-		{`{"metadata":{"conversationId":"abc"}}`, "abc"},                               // metadata.camelCase
-		{`{"metadata":{"conversation_id":"snake","conversationId":"camel"}}`, "snake"}, // snake 优先于 camel
-		{`{"conversation_id":"snake","conversationId":"camel"}`, "snake"},              // 顶层 snake 优先于 camel
-		{`{"conversationId":123}`, ""},                                                 // 数字 conversationId → 空
-		{`{"metadata":{"conversationId":456}}`, ""},                                    // metadata 数字 conversationId → 空
-		{`{"metadata":{"conversationId":"abc","user_id":"mu"}}`, "abc"},                // camel conversationId 优先于 user_id
+		{`{"metadata":{"conversation_id":"mc","user_id":"mu"},"conversation_id":"top"}`, "mc"}, // metadata.conversation_id Приоритет
+		{`{"conversation_id":"top"}`, "top"}, // Верхний уровень conversation_id
+		{`{"metadata":{"user_id":"mu"}}`, ""}, // user_id sticky-ключ уже исключен (слишком грубая гранулярность), откат к ротации
+		{`{"metadata":{"conversation_id":123}}`, ""}, // Не строка → пустой
+		{`not-json`, ""}, // Недопустимый JSON → пустой
+		// issue #35：фактически отправлено клиентом camelCase conversationId，ExtractKey Обязательно распознать.
+		{`{"conversationId":"abc"}`, "abc"}, // Верхний уровень camelCase
+		{`{"metadata":{"conversationId":"abc"}}`, "abc"}, // metadata.camelCase
+		{`{"metadata":{"conversation_id":"snake","conversationId":"camel"}}`, "snake"}, // snake имеет приоритет над camel
+		{`{"conversation_id":"snake","conversationId":"camel"}`, "snake"}, // Верхний уровень snake имеет приоритет над camel
+		{`{"conversationId":123}`, ""}, // Число conversationId → пустой
+		{`{"metadata":{"conversationId":456}}`, ""}, // metadata Число conversationId → пустой
+		{`{"metadata":{"conversationId":"abc","user_id":"mu"}}`, "abc"}, // camel conversationId имеет приоритет над user_id
 	}
 	for _, c := range cases {
 		if got := ExtractKey([]byte(c.body)); got != c.want {
@@ -182,7 +182,7 @@ func TestConcurrentSameKeyAssignsOnce(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 所有 goroutine 必须拿到同一个账号（写锁 re-check 防重复分配）。
+	// Все goroutine требуется захватить тот же аккаунт (write-lock re-check защита от повторного распределения).
 	first := ""
 	for _, u := range uids {
 		if u == "" {
@@ -200,7 +200,7 @@ func TestConcurrentSameKeyAssignsOnce(t *testing.T) {
 	}
 }
 
-// boundUID 直接读绑定 uid（不触发 Resolve 的重分配），供 Bind 系列测试断言用（包内私有 helper）。
+// boundUID Прямое чтение привязки uid（Не триггерить Resolve перераспределение), для Bind для ассертов серии тестов (приватный внутри пакета helper）。
 func (r *Router) boundUID(key string) (string, bool) {
 	r.mu.RLock()
 	e, ok := r.entries[key]
@@ -209,14 +209,14 @@ func (r *Router) boundUID(key string) (string, bool) {
 }
 
 func TestBindOverridesAndMirrors(t *testing.T) {
-	// Bind 幂等覆盖旧值，并异步镜像 SetBind。
+	// Bind Идемпотентная перезапись старого значения и асинхронное зеркалирование SetBind。
 	st := newCountingStore()
 	r := routerWith(st, []string{"a1", "a2"}, time.Minute)
 	r.Bind("c1", "a1")
 	if u, ok := r.boundUID("c1"); !ok || u != "a1" {
 		t.Fatalf("bind c1->a1 then bound=%s ok=%v", u, ok)
 	}
-	// 覆盖到 a2
+	// Перекрывает до a2
 	r.Bind("c1", "a2")
 	if u, _ := r.boundUID("c1"); u != "a2" {
 		t.Fatalf("bind override should map c1->a2, got %s", u)
@@ -277,7 +277,7 @@ func TestRedisMirrorSetBindCount(t *testing.T) {
 	st := newCountingStore()
 	r := routerWith(st, []string{"a1", "a2"}, time.Minute)
 	r.Resolve("c1")
-	r.Resolve("c1") // 快路径 touch → 又镜像一次
+	r.Resolve("c1") // Быстрый путь touch → еще раз зеркалировать
 	if st.setBinds < 1 {
 		t.Errorf("SetBind mirror count=%d want >=1", st.setBinds)
 	}
@@ -317,13 +317,13 @@ func TestLoadFromStoreRestores(t *testing.T) {
 	}
 }
 
-// TestExtractKeyDerivedFromContent 客户端不发会话 id 时回退到内容派生键：
-// 同一对话多轮（历史追加）→ 键稳定不变；不同对话 → 键不同。
+// TestExtractKeyDerivedFromContent клиент не отправляет сессию id то откат к ключу, производному от контента:
+// Несколько раундов одного диалога (добавление истории)→ Ключ стабилен и неизменен; разные диалоги → Ключи различаются.
 func TestExtractKeyDerivedFromContent(t *testing.T) {
-	// 第一轮
-	turn1 := `{"model":"glm-5.3","messages":[{"role":"system","content":"你是助手"},{"role":"user","content":"帮我写个排序算法"}]}`
-	// 第二轮：历史追加了 assistant 与新的 user（system 与首条 user 不变）
-	turn2 := `{"model":"glm-5.3","messages":[{"role":"system","content":"你是助手"},{"role":"user","content":"帮我写个排序算法"},{"role":"assistant","content":"好的"},{"role":"user","content":"换成快排"}]}`
+	// Первый раунд
+	turn1 := `{"model":"glm-5.3","messages":[{"role":"system","content":"Ты — ассистент"},{"role":"user","content":"Напиши алгоритм сортировки"}]}`
+	// Раунд 2: история дополнена assistant и новый user（system С первой записью user без изменений)
+	turn2 := `{"model":"glm-5.3","messages":[{"role":"system","content":"Ты — ассистент"},{"role":"user","content":"Напиши алгоритм сортировки"},{"role":"assistant","content":"ОК"},{"role":"user","content":"Заменить на быструю сортировку"}]}`
 	k1, k2 := ExtractKey([]byte(turn1)), ExtractKey([]byte(turn2))
 	if k1 == "" {
 		t.Fatal("derived key should not be empty when messages present")
@@ -334,17 +334,17 @@ func TestExtractKeyDerivedFromContent(t *testing.T) {
 	if !strings.HasPrefix(k1, "d-") {
 		t.Errorf("derived key should carry prefix d-: %q", k1)
 	}
-	// 不同对话（首条 user 不同）→ 不同键
-	other := `{"model":"glm-5.3","messages":[{"role":"system","content":"你是助手"},{"role":"user","content":"翻译这段话"}]}`
+	// Разные диалоги (первое сообщение user различается)→ Разные ключи
+	other := `{"model":"glm-5.3","messages":[{"role":"system","content":"Ты — ассистент"},{"role":"user","content":"перевести этот текст"}]}`
 	if ExtractKey([]byte(other)) == k1 {
 		t.Error("different first user message must yield a different derived key")
 	}
-	// 显式 id 优先于派生键
-	withID := `{"conversation_id":"my-session","messages":[{"role":"user","content":"帮我写个排序算法"}]}`
+	// Явно id приоритет над производным ключом
+	withID := `{"conversation_id":"my-session","messages":[{"role":"user","content":"Напиши алгоритм сортировки"}]}`
 	if got := ExtractKey([]byte(withID)); got != "my-session" {
 		t.Errorf("explicit id must win over derived key, got %q", got)
 	}
-	// 无 messages / 纯无文本内容 → 空（退回普通轮换，不误粘）
+	// отсутствует messages / Чисто нетекстовый контент → пусто (откат к обычной ротации, без залипания)
 	if got := ExtractKey([]byte(`{"model":"x"}`)); got != "" {
 		t.Errorf("no messages should yield empty key, got %q", got)
 	}
@@ -353,20 +353,20 @@ func TestExtractKeyDerivedFromContent(t *testing.T) {
 	}
 }
 
-// TestExtractKeyMultimodalContent 多模态 content 数组取文本部分派生。
+// TestExtractKeyMultimodalContent Мультимодальность content Производится из текстовой части массива.
 func TestExtractKeyMultimodalContent(t *testing.T) {
-	body := `{"messages":[{"role":"user","content":[{"type":"text","text":"看图说话"},{"type":"image_url","image_url":{"url":"http://x/y.png"}}]}]}`
+	body := `{"messages":[{"role":"user","content":[{"type":"text","text":"Описание по изображению"},{"type":"image_url","image_url":{"url":"http://x/y.png"}}]}]}`
 	k := ExtractKey([]byte(body))
 	if k == "" || !strings.HasPrefix(k, "d-") {
 		t.Fatalf("multimodal text should derive a key, got %q", k)
 	}
-	// 同一文本（图片不同）→ 同键（图片不参与派生，避免签名 URL 变化破坏粘性）
-	body2 := `{"messages":[{"role":"user","content":[{"type":"text","text":"看图说话"},{"type":"image_url","image_url":{"url":"http://x/z.png"}}]}]}`
+	// Тот же текст (разные изображения)→ тот же ключ (изображения не участвуют в деривации, чтобы избежать подписи URL изменение нарушит стикинесс)
+	body2 := `{"messages":[{"role":"user","content":[{"type":"text","text":"Описание по изображению"},{"type":"image_url","image_url":{"url":"http://x/z.png"}}]}]}`
 	if ExtractKey([]byte(body2)) != k {
 		t.Error("image url changes must not break derived key stability")
 	}
-	// 纯图片首条 user（无 text part）也应派生非空键（首图会话粘性盲区修复；
-	// 图片只入类型占位，同图重发/换 URL 均同键）。
+	// первая запись — только изображение user（отсутствует text part）также должен порождать непустой ключ (фикс слепой зоны липкости сессии первого изображения;
+	// изображение только как type-плейсхолдер, повтор того же изображения/замена URL все с одним ключом).
 	imgOnly := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"http://x/y.png"}}]}]}`
 	k2 := ExtractKey([]byte(imgOnly))
 	if k2 == "" || !strings.HasPrefix(k2, "d-") {

@@ -1,4 +1,4 @@
-// device_token_test.go X-Device-Token 注入 + 文件兜底读取单测。
+// device_token_test.go X-Device-Token инжект + Юнит-тест fallback-чтения файла.
 package upstream
 
 import (
@@ -14,13 +14,13 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// TestDeviceTokenInjected_WhenSet auth.Auth.DeviceToken 非空时 chat/billing 请求均注入。
+// TestDeviceTokenInjected_WhenSet auth.Auth.DeviceToken Если не пусто chat/billing Инъекция во все запросы.
 func TestDeviceTokenInjected_WhenSet(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1", DeviceToken: "tok-from-auth"}
-	// 用 server 端验证而非 RoundTripper 捕获：更贴近真实注入路径。
+	// использовать server валидация на стороне, а не RoundTripper Перехват: ближе к реальному пути инъекции.
 	for _, tc := range []struct {
-		name     string
-		apply    func(c *Client, req *http.Request)
+		name string
+		apply func(c *Client, req *http.Request)
 		wantPath string
 	}{
 		{"chat", func(c *Client, req *http.Request) { c.ChatHeaders(req, a, "", ChatMeta{}) }, "/v2/chat/completions"},
@@ -35,9 +35,9 @@ func TestDeviceTokenInjected_WhenSet(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := &Client{
-				HTTP:          srv.Client(),
-				ChatHTTP:      srv.Client(),
-				ChatBaseCN:    srv.URL,
+				HTTP: srv.Client(),
+				ChatHTTP: srv.Client(),
+				ChatBaseCN: srv.URL,
 				BillingBaseCN: srv.URL,
 			}
 			req, _ := http.NewRequest(http.MethodPost, srv.URL+tc.wantPath, nil)
@@ -54,9 +54,9 @@ func TestDeviceTokenInjected_WhenSet(t *testing.T) {
 	}
 }
 
-// TestDeviceTokenNotInjected_WhenEmpty 所有来源皆空时不注入该头。
+// TestDeviceTokenNotInjected_WhenEmpty при пустых всех источниках заголовок не инжектировать.
 func TestDeviceTokenNotInjected_WhenEmpty(t *testing.T) {
-	a := &auth.Auth{AccessToken: "at", UID: "u1"} // DeviceToken 空
+	a := &auth.Auth{AccessToken: "at", UID: "u1"} // DeviceToken пустой
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("X-Device-Token")
@@ -65,11 +65,11 @@ func TestDeviceTokenNotInjected_WhenEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &Client{
-		HTTP:          srv.Client(),
-		ChatHTTP:      srv.Client(),
-		ChatBaseCN:    srv.URL,
+		HTTP: srv.Client(),
+		ChatHTTP: srv.Client(),
+		ChatBaseCN: srv.URL,
 		BillingBaseCN: srv.URL,
-		// DeviceToken / DeviceTokenFile 皆空
+		// DeviceToken / DeviceTokenFile Всё пусто
 	}
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v2/chat/completions", nil)
 	c.ChatHeaders(req, a, "", ChatMeta{})
@@ -83,8 +83,8 @@ func TestDeviceTokenNotInjected_WhenEmpty(t *testing.T) {
 	}
 }
 
-// TestDeviceTokenFromConfigOrFile_Overrides 优先级：auth > config > 文件。
-// auth 有值时覆盖 config；auth 空时 config 兜底；auth 与 config 皆空时读文件。
+// TestDeviceTokenFromConfigOrFile_Overrides Приоритет:auth > config > файл.
+// auth при наличии значения перезаписать config；auth когда пусто config запасной вариант;auth и config Если всё пусто — читать файл.
 func TestDeviceTokenFromConfigOrFile_Overrides(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "device_token")
@@ -95,7 +95,7 @@ func TestDeviceTokenFromConfigOrFile_Overrides(t *testing.T) {
 	cases := []struct {
 		name string
 		auth string
-		cfg  string
+		cfg string
 		want string
 	}{
 		{"auth_over_config", "tok-auth", "tok-config", "tok-auth"},
@@ -104,7 +104,7 @@ func TestDeviceTokenFromConfigOrFile_Overrides(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 每个用例用独立缓存：device token 文件缓存 5 分钟，case 间会串扰。
+			// для каждого кейса — отдельный кэш:device token Файловый кэш 5 мин.,case будет интерференция.
 			save := resetDeviceTokenFileCache(fp)
 			defer save()
 			a := &auth.Auth{AccessToken: "at", UID: "u1", DeviceToken: tc.auth}
@@ -116,11 +116,11 @@ func TestDeviceTokenFromConfigOrFile_Overrides(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := &Client{
-				HTTP:            srv.Client(),
-				ChatHTTP:        srv.Client(),
-				ChatBaseCN:      srv.URL,
-				BillingBaseCN:   srv.URL,
-				DeviceToken:     tc.cfg,
+				HTTP: srv.Client(),
+				ChatHTTP: srv.Client(),
+				ChatBaseCN: srv.URL,
+				BillingBaseCN: srv.URL,
+				DeviceToken: tc.cfg,
 				DeviceTokenFile: fp,
 			}
 			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v2/chat/completions", nil)
@@ -137,7 +137,7 @@ func TestDeviceTokenFromConfigOrFile_Overrides(t *testing.T) {
 	}
 }
 
-// TestDeviceTokenFileTooLarge 文件超过 1KB 时忽略不注入。
+// TestDeviceTokenFileTooLarge файл превышает 1KB при — игнорировать, не инжектировать.
 func TestDeviceTokenFileTooLarge(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "device_token")
@@ -153,8 +153,8 @@ func TestDeviceTokenFileTooLarge(t *testing.T) {
 	}
 }
 
-// resetDeviceTokenFileCache 替换全局 device token 文件缓存并返回恢复函数。
-// 文件缓存 5 分钟 TTL，测试间需清空避免串扰。
+// resetDeviceTokenFileCache заменить глобально device token Кэшировать в файл и вернуть функцию восстановления.
+// Файловый кэш 5 минут TTL，между тестами требуется очистка во избежание перекрестных помех.
 func resetDeviceTokenFileCache(path string) (restore func()) {
 	dtFileCache.mu.Lock()
 	origPath := dtFileCache.path

@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// assistantRC 提取输出 messages 里各 assistant 消息的 reasoning_content（缺字段返回 ""+false）。
-// 返回的切片与 messages 中 assistant 消息一一对应（非 assistant 消息跳过）。
+// assistantRC извлечь вывод messages внутри каждый assistant сообщения reasoning_content（Возврат при отсутствии поля ""+false）。
+// возвращаемый слайс и messages Средний assistant сообщения соответствуют один к одному (не assistant сообщение пропущено).
 func assistantRC(t *testing.T, out []byte) []string {
 	t.Helper()
 	var m map[string]any
@@ -33,47 +33,47 @@ func assistantRC(t *testing.T, out []byte) []string {
 	return got
 }
 
-// TestBackfillReasoningContentDeepSeek DeepSeek 多轮一致性：历史 assistant 消息有
-// reasoning 痕迹时，所有 assistant 消息必须带 reasoning_content（string）。
-// 对齐官方 requiresReasoningContentOnAssistantMessages 行为。
+// TestBackfillReasoningContentDeepSeek DeepSeek Консистентность между раундами: история assistant сообщение имеет
+// reasoning При следах все assistant Сообщение должно содержать reasoning_content（string）。
+// выравнивание с официальным requiresReasoningContentOnAssistantMessages поведение.
 func TestBackfillReasoningContentDeepSeek(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
-		// 只断言「assistant 消息数」与「每条是否有 reasoning_content 字段」，
-		// 值是 string 即可（复制或空串，由具体用例断言）。
+		// ассертить только "assistant число сообщений» и "есть ли в каждом reasoning_content поле»,
+		// значение — string достаточно (копия или пустая строка, проверяется конкретным кейсом).
 		wantCount int
-		wantVals  []string // 与 assistant 消息一一对应；空串表示任意 string
+		wantVals []string // и assistant сообщения один-к-одному; пустая строка означает любое string
 	}{
-		{"assistant 带 reasoning 无 reasoning_content → 复制",
+		{"assistant Лента reasoning отсутствует reasoning_content → Копировать",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"user","content":"u"},
 				{"role":"assistant","content":"a","reasoning":"thought text"}]}`,
 			1, []string{"thought text"}},
-		{"assistant 带 reasoning_content 原样保留",
+		{"assistant Лента reasoning_content сохранить как есть",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"assistant","content":"a","reasoning_content":"already there"}]}`,
 			1, []string{"already there"}},
-		{"混合会话全量补上：无 reasoning 的 assistant 补空串",
+		{"Смешанные сессии дополняются полностью: нет reasoning assistant дополнить пустой строкой",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"user","content":"u"},
 				{"role":"assistant","content":"a1","reasoning":"t1"},
 				{"role":"user","content":"u2"},
 				{"role":"assistant","content":"a2"}]}`,
 			2, []string{"t1", ""}},
-		// 新契约下（门控 thinkingEnabled||hasTrace，issue #165）：L1 注入 enabled
-		// 后零痕迹 assistant 也补空串——期望从 <absent> 改为 ""（存在 string）。
-		{"assistant reasoning 为空串 → 视为零痕迹但 enabled 下补空串",
+		// по новому контракту (гейт thinkingEnabled||hasTrace，issue #165）：L1 инжект enabled
+		// после — ноль следов assistant также дополнить пустой строкой — ожидается из <absent> Изменить на ""（существует string）。
+		{"assistant reasoning пустая строка → считается нулевым следом, но enabled дополнить пустой строкой",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"assistant","content":"a","reasoning":""}]}`,
 			1, []string{""}},
-		{"多 assistant 都带 reasoning 全部复制",
+		{"много assistant все с reasoning Копировать всё",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"assistant","content":"a1","reasoning":"r1"},
 				{"role":"assistant","content":"a2","reasoning":"r2"}]}`,
 			2, []string{"r1", "r2"}},
-		// 官方 "string"!=typeof 语义：非 string reasoning 无从复制，落补 "" 分支。
-		{"assistant reasoning 非 string 值（数字）→ 补空串",
+		// Официальный "string«!=typeof семантика: не string reasoning неоткуда копировать, выполняетсязаполнение "" Ветка.
+		{"assistant reasoning не string Значение (число)→ дополнить пустой строкой",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"assistant","content":"a","reasoning":123}]}`,
 			1, []string{""}},
@@ -83,11 +83,11 @@ func TestBackfillReasoningContentDeepSeek(t *testing.T) {
 			out := PrepareBodyOptWithEfforts([]byte(c.body), false, nil)
 			got := assistantRC(t, out)
 			if len(got) != c.wantCount {
-				t.Fatalf("assistant 消息数 = %d want %d (out=%s)", len(got), c.wantCount, out)
+				t.Fatalf("assistant кол-во сообщений = %d want %d (out=%s)", len(got), c.wantCount, out)
 			}
 			for i, want := range c.wantVals {
 				if want == "" {
-					continue // 任意 string（补空串/复制都接受，但必须存在）
+					continue // произвольный string（дополнить пустой строкой/копии принимаются, но должны существовать)
 				}
 				if got[i] != want {
 					t.Errorf("assistant[%d].reasoning_content = %q want %q (out=%s)", i, got[i], want, out)
@@ -97,25 +97,25 @@ func TestBackfillReasoningContentDeepSeek(t *testing.T) {
 	}
 }
 
-// TestBackfillReasoningContentNoTrace 会话无 reasoning 痕迹 + thinking disabled
-// → 零改动：不白白给 assistant 消息加 reasoning_content 字段。
-// 官方 ReasoningContentBackfillRule 门控 = thinkingEnabled || hasTrace；disabled
-// 且无痕迹时两个半边都不亮 → 不补（issue #165 前该用例不分 disabled 与否一律不补，
-// 现按新契约收紧为 disabled 形态——纯 text + enabled 补空串由
-// TestBackfillZeroTraceThinkingEnabled 覆盖）。
+// TestBackfillReasoningContentNoTrace сессия без reasoning след + thinking disabled
+// → Без изменений: не выдавать зря assistant сообщение плюс reasoning_content Поле.
+// Официальный ReasoningContentBackfillRule гейт = thinkingEnabled || hasTrace；disabled
+// и при отсутствии следов обе половины не подсвечиваются → Не дополнять (issue #165 до этого кейс не различается disabled независимо — не компенсировать,
+// Теперь ужесточено по новому контракту до disabled Форма — чисто text + enabled Дополнение пустой строки —
+// TestBackfillZeroTraceThinkingEnabled перекрытие).
 func TestBackfillReasoningContentNoTrace(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
 	}{
-		{"disabled + 纯 text assistant 不动",
+		{"disabled + Чистый text assistant Не изменять",
 			`{"model":"deepseek-v4-flash","thinking":{"type":"disabled"},"messages":[
 				{"role":"user","content":"u"},
 				{"role":"assistant","content":"plain answer"}]}`},
-		{"无 assistant 消息不动",
+		{"отсутствует assistant сообщение без изменений",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"user","content":"u"}]}`},
-		{"messages 缺失不动",
+		{"messages при отсутствии — без действия",
 			`{"model":"deepseek-v4-flash"}`},
 	}
 	for _, c := range cases {
@@ -123,37 +123,37 @@ func TestBackfillReasoningContentNoTrace(t *testing.T) {
 			out := PrepareBodyOptWithEfforts([]byte(c.body), false, nil)
 			for _, rc := range assistantRC(t, out) {
 				if rc != "<absent>" {
-					t.Errorf("无 reasoning 痕迹却被加 reasoning_content=%q (out=%s)", rc, out)
+					t.Errorf("отсутствует reasoning След же добавлен reasoning_content=%q (out=%s)", rc, out)
 				}
 			}
 		})
 	}
 }
 
-// TestBackfillReasoningContentNonDeepSeek 非 deepseek 模型零改动：
-// reasoning 字段保持原样，不新增 reasoning_content。
+// TestBackfillReasoningContentNonDeepSeek не deepseek Без изменений модели:
+// reasoning поля остаются без изменений, без добавления reasoning_content。
 func TestBackfillReasoningContentNonDeepSeek(t *testing.T) {
 	body := `{"model":"glm-5.2","messages":[
 		{"role":"assistant","content":"a","reasoning":"thought"}]}`
 	out := PrepareBodyOptWithEfforts([]byte(body), false, nil)
 	for _, rc := range assistantRC(t, out) {
 		if rc != "<absent>" {
-			t.Errorf("非 deepseek 不应 backfill, got reasoning_content=%q (out=%s)", rc, out)
+			t.Errorf("не deepseek Не должен backfill, got reasoning_content=%q (out=%s)", rc, out)
 		}
 	}
 }
 
-// TestBackfillReasoningContentBothFields 同时带 reasoning 与 reasoning_content：
-// 以 reasoning_content 为准（不覆盖），reasoning 字段保留（兼容）——对齐客户端 matches 规则。
+// TestBackfillReasoningContentBothFields одновременно с reasoning и reasoning_content：
+// по reasoning_content считается эталоном (без перезаписи),reasoning Поле сохранено (совместимость) — выравнивание с клиентом matches Правило.
 func TestBackfillReasoningContentBothFields(t *testing.T) {
 	body := `{"model":"deepseek-v4-flash","messages":[
 		{"role":"assistant","content":"a","reasoning":"t","reasoning_content":"existing"}]}`
 	out := PrepareBodyOptWithEfforts([]byte(body), false, nil)
 	got := assistantRC(t, out)
 	if len(got) != 1 || got[0] != "existing" {
-		t.Errorf("reasoning_content 应以已有值为准: got %v (out=%s)", got, out)
+		t.Errorf("reasoning_content Следует использовать уже имеющееся значение: got %v (out=%s)", got, out)
 	}
-	// 同时确认 reasoning 字段仍原样保留。
+	// одновременно подтвердить reasoning Поле сохраняется как есть.
 	var m map[string]any
 	if err := json.Unmarshal(out, &m); err != nil {
 		t.Fatal(err)
@@ -161,49 +161,49 @@ func TestBackfillReasoningContentBothFields(t *testing.T) {
 	msgs, _ := m["messages"].([]any)
 	first, _ := msgs[0].(map[string]any)
 	if r, ok := first["reasoning"].(string); !ok || r != "t" {
-		t.Errorf("reasoning 字段被改动: %v (out=%s)", first, out)
+		t.Errorf("reasoning поле изменено: %v (out=%s)", first, out)
 	}
 }
 
-// TestBackfillComposesWithInjectThinking backfill 与 injectThinking 组合语义：
-// 显式 disabled 时 reasoning_effort 被删，但 backfill 的 hasTrace 半边照常生效
-// （多轮一致性不因关思维链而丢）；disabled + 零痕迹则零改动（thinkingEnabled 半边不亮）。
+// TestBackfillComposesWithInjectThinking backfill и injectThinking Комбинированная семантика:
+// Явно disabled Время reasoning_effort Удален, но backfill hasTrace Вторая половина работает как обычно
+// （Многократная консистентность не теряется при отключении цепочки рассуждений);disabled + Без следа — без изменений (thinkingEnabled половина не светится).
 func TestBackfillComposesWithInjectThinking(t *testing.T) {
-	// R6：disabled + 有痕迹 → 照补（复制 reasoning）。
+	// R6：disabled + Есть след → Компенсировать копированием ( reasoning）。
 	body := `{"model":"DEEPSEEK-v4-flash","thinking":{"type":"disabled"},"reasoning_effort":"high","messages":[
 		{"role":"user","content":"u"},
 		{"role":"assistant","content":"a","reasoning":"thought"}]}`
 	out := PrepareBodyOptWithEfforts([]byte(body), false, nil)
 	got := assistantRC(t, out)
 	if len(got) != 1 || got[0] != "thought" {
-		t.Errorf("disabled 时 backfill 仍应生效: got %v (out=%s)", got, out)
+		t.Errorf("disabled Время backfill все равно должен действовать: got %v (out=%s)", got, out)
 	}
 	if typ, present := getThinkingType(t, out); !present || typ != "disabled" {
-		t.Errorf("thinking.type 应保留 disabled, got %q present=%v", typ, present)
+		t.Errorf("thinking.type следует сохранить disabled, got %q present=%v", typ, present)
 	}
 	for _, k := range []string{"reasoning_effort", "reasoningEffort"} {
 		if _, ok := objFieldString(t, out, k); ok {
-			t.Errorf("%s 应被删除（disabled 时）", k)
+			t.Errorf("%s должен быть удален (disabled при)", k)
 		}
 	}
 
-	// R2：disabled + 零痕迹 → 零改动（新契约四分支之一）。
+	// R2：disabled + Нулевой след → без изменений (одна из четырех веток нового контракта).
 	body = `{"model":"DEEPSEEK-v4-flash","thinking":{"type":"disabled"},"messages":[
 		{"role":"user","content":"u"},
 		{"role":"assistant","content":"plain"}]}`
 	out = PrepareBodyOptWithEfforts([]byte(body), false, nil)
 	for _, rc := range assistantRC(t, out) {
 		if rc != "<absent>" {
-			t.Errorf("disabled+零痕迹 不应 backfill, got reasoning_content=%q (out=%s)", rc, out)
+			t.Errorf("disabled+Нулевой след Не должен backfill, got reasoning_content=%q (out=%s)", rc, out)
 		}
 	}
 }
 
-// TestBackfillZeroTraceThinkingEnabled issue #165 复现锚（R1）：零痕迹多轮 deepseek，
-// 经 L1 injectThinking 注入 enabled 后，thinkingEnabled 半边亮 → 每条 assistant
-// 保证 reasoning_content 是 string（此处无 reasoning 可复制，全补空串）。
-// 官方 ReasoningContentBackfillRule 的门控是 thinkingEnabled || hasTrace，
-// 第三方客户端丢推理回传（零痕迹）形态下官方仍补，网关此前只移植了 hasTrace 半边。
+// TestBackfillZeroTraceThinkingEnabled issue #165 Якорь воспроизведения (R1）：многокруговой без следов deepseek，
+// Через L1 injectThinking инжект enabled после,thinkingEnabled Половина подсвечена → Каждая assistant
+// Гарантировать reasoning_content Да string（здесь нет reasoning копируемо, всё дополнить пустыми строками).
+// Официальный ReasoningContentBackfillRule гейт — thinkingEnabled || hasTrace，
+// при потере сторонним клиентом обратного вызова инференса (zero-trace) официал всё равно восполняет, шлюз ранее портировал только hasTrace половина.
 func TestBackfillZeroTraceThinkingEnabled(t *testing.T) {
 	body := `{"model":"deepseek-v4-flash","messages":[
 		{"role":"user","content":"u1"},
@@ -212,34 +212,34 @@ func TestBackfillZeroTraceThinkingEnabled(t *testing.T) {
 		{"role":"assistant","content":"a2"},
 		{"role":"user","content":"u3"}]}`
 	out := PrepareBodyOptWithEfforts([]byte(body), false, nil)
-	// 前置：出站确实是注入后的 enabled 形态（thinkingEnabled 判定读注入后请求体）。
+	// прекондиция: исходящий действительно после инъекции enabled форма (thinkingEnabled определение тела запроса после read-инъекции).
 	if typ, present := getThinkingType(t, out); !present || typ != "enabled" {
 		t.Fatalf("thinking.type=%q present=%v want enabled (out=%s)", typ, present, out)
 	}
 	got := assistantRC(t, out)
 	if len(got) != 2 {
-		t.Fatalf("assistant 消息数 = %d want 2 (out=%s)", len(got), out)
+		t.Fatalf("assistant кол-во сообщений = %d want 2 (out=%s)", len(got), out)
 	}
 	for i, rc := range got {
-		if rc != "" { // 既有 string（含空串）即满足；<absent>（键不存在）不满足
-			t.Errorf("零痕迹 enabled 形态下 assistant[%d].reasoning_content = %q want 存在且为 \"\" (out=%s)", i, rc, out)
+		if rc != "" { // Существующий string（включая пустую строку) считается выполненным;<absent>（ключ отсутствует) — условие не выполнено
+			t.Errorf("Нулевой след enabled В режиме assistant[%d].reasoning_content = %q want существует и равен \"\" (out=%s)", i, rc, out)
 		}
 	}
 }
 
-// TestBackfillNullAndNonStringNormalized issue #165 null/非 string 归一化（R3）：
-// 官方跳过条件是 "string"!=typeof reasoning_content 才动手——null/数字会被旧代码
-// 的 if _, ok（键存在即跳过）当「已有」跳过，新契约归一化为 ""。
-// 注意 hasTrace 半边：reasoning_content 键存在本身即痕迹，门控必然亮。
+// TestBackfillNullAndNonStringNormalized issue #165 null/не string Нормализация (R3）：
+// Официальное условие пропуска — "string"!=typeof reasoning_content только затем действует —null/число будет старым кодом
+// if _, ok（ключ существует — пропуск) как "уже есть» пропуск, новый контракт нормализуется в ""。
+// Внимание hasTrace Половина:reasoning_content само наличие ключа — уже след, гейт обязательно сработает.
 func TestBackfillNullAndNonStringNormalized(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
 	}{
-		{"reasoning_content:null 归一化为空串",
+		{"reasoning_content:null нормализовать в пустую строку",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"assistant","content":"a","reasoning_content":null}]}`},
-		{"reasoning_content:数字 归一化为空串",
+		{"reasoning_content:Число нормализовать в пустую строку",
 			`{"model":"deepseek-v4-flash","messages":[
 				{"role":"assistant","content":"a","reasoning_content":123}]}`},
 	}
@@ -248,10 +248,10 @@ func TestBackfillNullAndNonStringNormalized(t *testing.T) {
 			out := PrepareBodyOptWithEfforts([]byte(c.body), false, nil)
 			got := assistantRC(t, out)
 			if len(got) != 1 {
-				t.Fatalf("assistant 消息数 = %d want 1 (out=%s)", len(got), out)
+				t.Fatalf("assistant кол-во сообщений = %d want 1 (out=%s)", len(got), out)
 			}
 			if got[0] != "" || got[0] == "<absent>" {
-				t.Errorf("reasoning_content 应归一化为 \"\", got %q (out=%s)", got[0], out)
+				t.Errorf("reasoning_content должно быть нормализовано к \"\", got %q (out=%s)", got[0], out)
 			}
 		})
 	}

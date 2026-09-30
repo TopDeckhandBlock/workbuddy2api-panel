@@ -10,9 +10,9 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// TestClaimRewardWebEndpoint 领奖走 Web 域（workbuddy.cn）、任务码在路径里、无 body。
-// 这是与 CLI 域（copilot.tencent.com/v2/.../reward/claim，task_code 在 body）的关键区别——
-// 后者路径不存在，曾导致长期 400 "task not completed" 误判为"上游不支持领取"。
+// TestClaimRewardWebEndpoint получение награды через Web Домен (workbuddy.cn）、код задачи в пути, без body。
+// Это с CLI Домен (copilot.tencent.com/v2/.../reward/claim，task_code В body）Ключевое отличие —
+// последний путь не существует, ранее приводило к длительному 400 "task not completed« ошибочно классифицировано как«апстрим не поддерживает получение"。
 func TestClaimRewardWebEndpoint(t *testing.T) {
 	var gotPath, gotMethod, gotBody string
 	var gotPlatform, gotReferer string
@@ -41,21 +41,21 @@ func TestClaimRewardWebEndpoint(t *testing.T) {
 		t.Errorf("method=%s want POST", gotMethod)
 	}
 	if want := "/activity/growth/tasks/Model_chat_GLM5.2/claim"; gotPath != want {
-		t.Errorf("path=%q want %q（任务码必须在路径里）", gotPath, want)
+		t.Errorf("path=%q want %q（код задачи обязателен в пути)", gotPath, want)
 	}
 	if gotBody != "" {
-		t.Errorf("claim 不应携带 body，got %q", gotBody)
+		t.Errorf("claim не должен содержать body，got %q", gotBody)
 	}
 	if gotPlatform != "web" {
 		t.Errorf("x-client-platform=%q want web", gotPlatform)
 	}
 	if !strings.Contains(gotReferer, "workbuddy.cn") {
-		t.Errorf("Referer=%q 应指向 workbuddy.cn", gotReferer)
+		t.Errorf("Referer=%q Должен указывать на workbuddy.cn", gotReferer)
 	}
 }
 
-// TestClaimRewardAlreadyClaimed 重复领取：上游返回 already_claimed=true，
-// 本地应视为"无新增奖励但不报错"（幂等语义）。
+// TestClaimRewardAlreadyClaimed Повторное получение: апстрим возвращает already_claimed=true，
+// локально считать как"Без доп. награды, но без ошибки"（семантика идемпотентности).
 func TestClaimRewardAlreadyClaimed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"code":0,"msg":"OK","data":{"already_claimed":true}}`))
@@ -71,7 +71,7 @@ func TestClaimRewardAlreadyClaimed(t *testing.T) {
 	}
 }
 
-// TestClaimRewardNotCompleted 未达标：上游 400 + task not completed 应作为错误透出。
+// TestClaimRewardNotCompleted Не достигнуто: upstream 400 + task not completed должно пробрасываться как ошибка.
 func TestClaimRewardNotCompleted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)

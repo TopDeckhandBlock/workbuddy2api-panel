@@ -1,9 +1,9 @@
-// ring.go 固定容量的结构化日志环形缓冲（并发安全，实现 io.Writer）。
-// main 把 log 包输出与 chat 表格日志经 MultiWriter 镜像进来，面板
-// /panel/api/logs 读取快照；超出容量的旧行按 FIFO 淘汰。
+// ring.go Кольцевой буфер структурированных логов фиксированной емкости (потокобезопасный, реализация io.Writer）。
+// main взять log Вывод пакета и chat Табличный лог через MultiWriter образ загружен, панель
+// /panel/api/logs Чтение снапшота; старые строки сверх ёмкости по FIFO Отбраковано.
 //
-// 每行入环时按前缀规则归类频道（chat=对话请求表格行 / task=任务动作 /
-// sys=系统与其它），面板日志视图按频道筛选——对话流量大时任务结果不被冲掉。
+// при попадании строки в кольцо классификация канала по префиксу (chat=Строка таблицы запросов диалога / task=Действие задачи /
+// sys=система и прочие), представление логов панели фильтруется по каналам — при большом трафике диалогов результаты задач не теряются.
 package panel
 
 import (
@@ -13,34 +13,35 @@ import (
 	"time"
 )
 
-// 日志频道。
+// Канал логов.
 const (
 	ChChat = "chat"
 	ChTask = "task"
-	ChSys  = "sys"
+	ChSys = "sys"
 )
 
-// LogEntry 单条日志（时间戳取写入时刻；log 包行的行首日期时间已被剥离）。
+// LogEntry Одна запись лога (timestamp — момент записи;log дата/время в начале строки пакета уже stripped).
 type LogEntry struct {
-	TS   time.Time `json:"ts"`
-	Ch   string    `json:"ch"`
-	Text string    `json:"text"`
+	TS time.Time `json:"ts"`
+	Ch string `json:"ch"`
+	Text string `json:"text"`
 }
 
-// taskPrefixes 任务动作日志的行首标识（scheduler 与 panel 的既有口径）。
+// taskPrefixes префикс строки лога действий задачи (scheduler и panel Существующий критерий).
 var taskPrefixes = []string{
 	"school ", "streak-bonus ", "travel ", "blackcat ", "lottery ",
 	"checkin ", "activity ", "keepalive ", "balance ", "user-resource ",
-	"panel: 任务", "panel: 一键", "panel: checkin", "panel: 手动",
-	"panel: 队列", "panel: 券码",
+	"panel: задача", "panel: В один клик", "panel: checkin", "panel: Вручную",
+	"panel: очередь", "panel: Код купона", "panel: Запуск очереди", "panel: Действие задачи",
+	"panel: сканирование", "panel: Очередь", "panel: Выполнение",
 }
 
-// tsPrefixRe log 包默认 flags（日期 时间）产生的行首时间戳。
+// tsPrefixRe log Пакет по умолчанию flags（Дата времени) метка времени в начале строки.
 var tsPrefixRe = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
 
-// classifyLine 按行首特征归类频道。
+// classifyLine Классификация каналов по признакам начала строки.
 func classifyLine(line string) string {
-	if strings.HasPrefix(line, "| #") { // chat 表格日志（server/logging.go logChatRow）
+	if strings.HasPrefix(line, "| #") { // chat Лог таблицы (server/logging.go logChatRow）
 		return ChChat
 	}
 	for _, p := range taskPrefixes {
@@ -51,14 +52,14 @@ func classifyLine(line string) string {
 	return ChSys
 }
 
-// Ring 日志环形缓冲。
+// Ring кольцевой буфер логов.
 type Ring struct {
-	mu      sync.Mutex
+	mu sync.Mutex
 	entries []LogEntry
-	cap     int
+	cap int
 }
 
-// NewRing 构建容量为 capacity 的日志环（非正值回退 500）。
+// NewRing Создать емкостью capacity кольцевой лог (откат при неположительном значении 500）。
 func NewRing(capacity int) *Ring {
 	if capacity <= 0 {
 		capacity = 500
@@ -66,7 +67,7 @@ func NewRing(capacity int) *Ring {
 	return &Ring{cap: capacity}
 }
 
-// Write 按 \n 切分入环（实现 io.Writer）。空行丢弃；超容量淘汰最旧行。
+// Write Нажать \n Нарезка в кольцо (реализация io.Writer）。Пустые строки отбрасываются; при превышении емкости вытесняется самая старая строка.
 func (r *Ring) Write(p []byte) (int, error) {
 	now := time.Now()
 	r.mu.Lock()
@@ -84,7 +85,7 @@ func (r *Ring) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Snapshot 按写入顺序返回缓冲内全部条目（拷贝，调用方可安全持有）。
+// Snapshot Возвращает все записи буфера в порядке записи (копия, вызывающая сторона может безопасно хранить).
 func (r *Ring) Snapshot() []LogEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()

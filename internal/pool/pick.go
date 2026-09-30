@@ -1,4 +1,4 @@
-// 选号：Pick 簇（healthy 成本分层 + 快过期虚拟实例权重 + 全冷却兜底 + 在途占满过滤）。
+// Выбор номера:Pick Кластер (healthy Стратификация стоимости + вес скоро истекающего виртуального инстанса + Фолбэк полного кулдауна + фильтрация по заполнению in-flight).
 package pool
 
 import (
@@ -11,36 +11,36 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 )
 
-// Pick 单一选号入口（无请求级轮换、无 realm 过滤，模型感知缺省账号级）。
-// 需要请求级轮换（tried）或分池（realm）时用 PickExcludingForRealm。
+// Pick Единая точка выбора номера (без ротации на уровне запроса, без realm Фильтрация, по умолчанию уровень аккаунта с учетом модели).
+// требуется ротация на уровне запроса (tried）или раздельный пул (realm）использовать при PickExcludingForRealm。
 func (p *Pool) Pick() *auth.Auth {
 	return p.pick(nil, "", "")
 }
 
-// PickExcluding 同上，但跳过 tried 中的 uid（请求级轮换）。
-// 挑选策略：healthy 账号中按权重取前 5 名，再在 Top5 内按同一权重加权随机抽签，
-// 意图是打散热点，避免永远打同一个账号。
+// PickExcluding То же, но пропустить tried в uid（ротация на уровне запроса).
+// Стратегия выбора:healthy выбор топ-N аккаунтов по весу 5 имя, затем в Top5 внутри — взвешенная случайная выборка с равным весом,
+// цель — размазать хотспоты, избежать постоянного попадания в один аккаунт.
 func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
 	return p.pick(tried, "", "")
 }
 
-// PickExcludingForModel 模型感知选号：等同 PickExcluding，但对「6004 模型级冷却中的
-// 账号」进行模型豁免——请求模型与其 trigger 模型不同时视为可用（issue #31）。
-// reqModel 为空时即普通 PickExcluding（不影响既有调用语义）。
+// PickExcludingForModel выбор с учётом модели: эквивалентно PickExcluding，Но для "6004 в кулдауне уровня модели
+// аккаунта» для исключения модели — запрашиваемая модель и её trigger При несовпадении моделей считается доступным (issue #31）。
+// reqModel при пустом значении — обычный PickExcluding（не влияет на существующую семантику вызовов).
 func (p *Pool) PickExcludingForModel(tried map[string]bool, reqModel string) *auth.Auth {
 	return p.pick(tried, reqModel, "")
 }
 
-// PickExcludingForRealm 模型感知 + 分池选号：候选集先按 Realm()==realm 过滤
-// （realm 空 = 不过滤，退化为 PickExcludingForModel），再按模型健康口径判定。
-// 供 handler 在 global/cn 双域下分流（global 模型请求只路由 global 账号）。
+// PickExcludingForRealm Осведомленность о модели + выбор номера по пулам: кандидаты сначала по Realm()==realm Фильтрация
+// （realm пустой = не фильтровать, деградирует в PickExcludingForModel），Далее судить по health-критерию модели.
+// Подача handler В global/cn Разделение трафика в двух доменах (global Запросы модели маршрутизируются только global аккаунтом).
 func (p *Pool) PickExcludingForRealm(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	return p.pick(tried, reqModel, realm)
 }
 
-// pick 在 healthy 候选集中按权重加权随机选出账号，并记录 lastUsed（防并发撞号）。
-// reqModel 非空时把健康口径换成 healthyForModel（6004 模型豁免生效）。
-// realm 非空时候选过滤叠加 Realm()==realm 谓词（分池选号域）。
+// pick В healthy в пуле кандидатов выбрать аккаунт взвешенным случайным выбором и записать lastUsed（защита от коллизии аккаунтов при конкуренции).
+// reqModel при непустом значении сменить критерий health на healthyForModel（6004 исключение модели активно).
+// realm При непустом — наложение фильтра кандидатов Realm()==realm Предикат (домен выбора номера с разделением пулов).
 func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -50,52 +50,52 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	if reqModel != "" {
 		healthyOf = func(e *entry) bool { return realmOK(e) && e.healthyForModel(now, reqModel) }
 	}
-	// floorBlocked 积分保底拦截判定（实现在 floorBlockedForModel，与粘性路径共用）：
-	// 触底 + 实测收费（tier 2 有效观测）即拦；tier 0/1 不受限。
+	// floorBlocked Проверка блокировки минимального порога баллов (реализовано в floorBlockedForModel，совместно со sticky-маршрутом):
+	// Достигнуто дно + Фактически платно (tier 2 валидных наблюдений) — блокировать;tier 0/1 Без ограничений.
 	floorBlocked := func(e *entry) bool { return p.floorBlockedForModel(e, reqModel, now) }
 	var cands []*entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
 			continue
 		}
-		// 惰性清理过期的模型级冷却与成本台账（两者的 map 都不无限膨胀；
-		// status 只读遍历天然跳过过期项，但内存条目必须在此真正删除）。
+		// ленивая очистка просроченного охлаждения уровня модели и реестра стоимости (у обоих map Не разрастается бесконечно;
+		// status read-only обход пропускает просроченные записи, но in-memory записи должны быть здесь реально удалены).
 		e.pruneExpiredModelCooldowns(now)
 		e.pruneExpiredModelCosts(now)
 		if !healthyOf(e) {
 			continue
 		}
 		if floorBlocked(e) {
-			continue // 积分保底：触底号不接实测收费模型（tier 0/1 不受限）
+			continue // Гарантия баллов: аккаунт на дне не берёт платные тестовые модели (tier 0/1 не ограничено)
 		}
 		if p.inFlightFull(e) {
-			continue // 在途占满：跳过（max=0 不限时不触发）
+			continue // in-flight заполнен: пропуск (max=0 без ограничения по времени не срабатывает)
 		}
 		cands = append(cands, e)
 	}
 	if len(cands) == 0 {
-		// 全冷却兜底：无 healthy 候选时，从冷却账号里选 until 最早到期的一个
-		// （熔断/冷却共用 expiry 口径，取较早截止者）。禁用的账号永不参与兜底。
+		// Фолбэк полного охлаждения: нет healthy при выборе кандидата — выбирать из охлаждаемых аккаунтов until Самый ранний истекающий
+		// （Circuit Breaker/общий кулдаун expiry метрика, берётся более ранний дедлайн). Отключённые аккаунты никогда не участвуют в fallback.
 		return p.pickEarliestExpiryLocked(tried, now, realm)
 	}
-	// top5 短名单按权重降序截断（而非 credits 单纯降序）：否则闲置补偿根本进不了
-	// 短名单决策，低 credits 但久置的账号会永远排不进 top5。
-	// maxCredits 统一用**全集口径**（tier 过滤前的全部 healthy 候选）：截断排序与
-	// 抽签权重共享同一基准，两个阶段权重可比。
+	// top5 Короткий список усекается по убыванию веса (а не credits просто по убыванию): иначе компенсация простоя вообще не попадёт в
+	// решение по короткому списку, низкий credits но давно простаивающие аккаунты никогда не попадут в очередь top5。
+	// maxCredits Использовать единообразно**Метрика полного множества**（tier все до фильтрации healthy кандидаты): усечение, сортировка и
+	// Веса розыгрыша на единой базе, веса двух этапов сопоставимы.
 	var maxCredits int64
 	for _, e := range cands {
 		if e.credits > maxCredits {
 			maxCredits = e.credits
 		}
 	}
-	// 成本分层（reqModel 非空时）：按该模型的实测扣费把候选分层，只保留最优层。
-	//   0 = 已实测免费（限免期/夜间免费的号，最强偏好）
-	//   1 = 无观测（含观测过期）
-	//   2 = 已实测收费
-	// 为什么"无观测"排在"已实测收费"之前：新号的限免状态只能靠实测发现，
-	// 若已知收费的号恒压过未知号，那台免费的号永远轮不到，也就永远学不到。
-	// 为什么用硬过滤而非仅排序：pickWeighted 会在候选内加权随机，只排序的话
-	// 收费号仍有机会抽中，达不到"优先免费"的语义。
+	// Стратификация стоимости (reqModel при непустом): стратифицировать кандидатов по фактическому списанию для модели, оставить только оптимальный слой.
+	// 0 = Фактически бесплатно по тестам (период бесплатного доступа/аккаунты с ночным бесплатным доступом, максимальный приоритет)
+	// 1 = Нет наблюдений (включая просроченные)
+	// 2 = Платно, проверено тестом
+	// Почему«нет наблюдений«Идёт после«Платно, проверено тестом«Ранее: статус лимита/бесплатности нового аккаунта определялся только тестом,
+	// если известный платный аккаунт всегда давит неизвестный, бесплатный никогда не выберется и никогда не обучится.
+	// Почему жесткая фильтрация, а не только сортировка:pickWeighted будет взвешенный рандом среди кандидатов, при только сортировке
+	// Платный номер всё ещё может выпасть, не достигает«приоритет бесплатному«семантика.
 	costTier := func(e *entry) (int, float64) {
 		mc, ok := e.modelCostOf(reqModel, now)
 		if !ok {
@@ -108,22 +108,22 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 	}
 	bestTier := 2
 	hasTier1 := false
-	explored := false // 本次 pick 是否切了探索层（事件日志在选中号确定后打）
+	explored := false // Текущий pick Переключен ли слой исследования (лог события после фиксации выбранного номера)
 	for _, e := range cands {
 		if ti, _ := costTier(e); ti < bestTier {
 			bestTier = ti
 		}
 	}
-	// 条件探索（issue #136 方案 a′）：tier 0 垄断层存在（bestTier==0 且 reqModel
-	// 非空）且候选含 tier 1（冻结存在）且距上次探索 ≥ 窗口（零值 timer=从未探索
-	// →首次满足即探）时，本次 pick 生效层切 tier 1-only——探索=搭车改道，把一个
-	// 既有真实用户请求改道给未知号（零新增上游请求；IP 维度零增量，WAF 友好）。
-	// 成功 → NoteModelCost 首观测 → 毕业（tier 0/2，下一轮 pick 立即生效）；
-	// 失败 → 既有错误策略照常，无探测风暴。
-	// hasTier1 复用本循环上方 costTier 的预计算口径（每候选一次的契约不变）。
-	// timer 同锁写入：并发 pick 串行进入写锁，只有一个进入者能通过窗口判定
-	//（天然防重复探索）。key = realm + "\x1f" + reqModel：同模型名可跨域，
-	// 探索节奏按 (域, 模型) 独立；realm==""（Pick 老语义）单独成键。
+	// Исследование условий (issue #136 схема a′）：tier 0 слой монополии существует (bestTier==0 И reqModel
+	// непусто) и кандидат содержит tier 1（заморозка существует) и с момента последней проверки ≥ Окно (нулевое значение timer=никогда не исследовалось
+	// →при первом выполнении условия сразу проба), в этот раз pick Переключение слоя применения tier 1-only——Исследование=Попутное перенаправление, превращает один
+	// перенаправление существующего реального запроса пользователя на неизвестный номер (ноль новых запросов к апстриму;IP нулевой инкремент по измерению,WAF дружелюбно).
+	// Успех → NoteModelCost Первое наблюдение → Выпуск (tier 0/2，следующий раунд pick вступает в силу немедленно);
+	// ошибка → Существующая стратегия ошибок без изменений, без шторма зондирования.
+	// hasTier1 Переиспользовать выше в этом цикле costTier предвычисленная метрика (контракт: один раз на кандидата).
+	// timer Запись под одним локом: конкурентно pick Последовательный вход в write-lock, только один вошедший проходит проверку окна
+	//（Естественная защита от повторного обхода).key = realm + "\x1f" + reqModel：Одинаковое имя модели может быть кросс-доменным,
+	// Ритм исследования по (Домен, Модель) независимо;realm==""（Pick старая семантика) отдельным ключом.
 	if p.costExploreInterval > 0 && bestTier == 0 && reqModel != "" {
 		for _, e := range cands {
 			if ti, _ := costTier(e); ti == 1 {
@@ -139,13 +139,13 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 			explored = true
 		}
 	}
-	// 权重只算一次：顶 5 截断要排序，若在 sort 比较器里现算 weightOf 会翻成 O(n log n) 次
-	// 冗余浮点计算（46 账号约 500 次）。先做 O(n) 预计算，再按 (权重, uid) 排序。
-	// costTier/modelCostOf 同样每候选只算一次（存入 tier/cost1k），比较器只读缓存字段。
+	// Вес считается один раз: топ 5 усечение требует сортировки, если в sort вычисление на лету в компараторе weightOf будет преобразовано в O(n log n) Раз
+	// Избыточные вычисления с плавающей точкой (46 аккаунт около 500 раз). Сначала сделать O(n) предвычисление, затем по (Вес, uid) Сортировка.
+	// costTier/modelCostOf Аналогично каждый кандидат учитывается один раз (сохранение в tier/cost1k），Компаратор читает только поле кэша.
 	type weighted struct {
-		e      *entry
-		w      float64
-		tier   int
+		e *entry
+		w float64
+		tier int
 		cost1k float64
 	}
 	ws := make([]weighted, 0, len(cands))
@@ -155,12 +155,12 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 			ws = append(ws, weighted{e: e, w: p.routingWeightOf(e, maxCredits, now), tier: ti, cost1k: ci})
 		}
 	}
-	// 等权重洗牌：仅当存在权重相等且候选数超过 top5 时，才对 ws 做 Fisher-Yates
-	// 洗牌（且**不消耗 p.randInt64N 注入源**，避免改变 pickWeighted 的确定性语义，
-	// 见 TestPickDeterministicViaSetRandomSource）。权重全等或存在并列时，按字典序
-	// 截断会让 uid 靠后的账号永远进不了 top5（等权重账号被字典序饿死、LRU 兜底
-	// 又只在 top5 内转——惊群集中单号的根因）。洗牌用独立的 time-seeded 源，
-	// 只在截断边界制造等权重随机次序，不影响加权抽签本身的确定性。
+	// Перемешивание при равных весах: только если есть равные веса и число кандидатов превышает top5 тогда только для ws выполнить Fisher-Yates
+	// шафл (причём**не расходует p.randInt64N Источник инъекции**，избежать изменения pickWeighted детерминированная семантика,
+	// См. TestPickDeterministicViaSetRandomSource）。при равных весах или наличии tie — по лексикографическому порядку
+	// усечение приведет к uid Аккаунты в конце очереди никогда не попадут в top5（аккаунты с равным весом голодают из-за лексикографического порядка,LRU Фолбэк
+	// И только в top5 Внутренняя переадресация — первопричина thundering herd на одном номере). Для шафла используется отдельный time-seeded Источник,
+	// Только на границе усечения создает случайный порядок с равным весом, не влияет на детерминированность взвешенной выборки.
 	if len(ws) > 5 {
 		eq := false
 		for i := 1; i < len(ws); i++ {
@@ -175,31 +175,31 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		}
 	}
 	sort.SliceStable(ws, func(i, j int) bool {
-		// costTier 硬过滤后 ws 全员同层，但仍按 cost1k 升序排（tier 2 层内单价低者
-		// 在前；tier 0/1 层 cost1k 恒 0，本比较退化为权重比较）——读缓存字段不现算。
+		// costTier После жёсткой фильтрации ws Все на одном уровне, но всё равно по cost1k Сортировка по возрастанию (tier 2 внутри слоя дешевле за единицу
+		// впереди;tier 0/1 уровень cost1k Конст. 0，сравнение вырождается в сравнение весов) — читать поле из кэша, без пересчёта.
 		if ws[i].cost1k != ws[j].cost1k {
-			return ws[i].cost1k < ws[j].cost1k // 收费层：单价低的在前
+			return ws[i].cost1k < ws[j].cost1k // Уровень тарификации: сначала с низкой ценой за единицу
 		}
 		if ws[i].w != ws[j].w {
 			return ws[i].w > ws[j].w
 		}
-		return ws[i].e.a.UID < ws[j].e.a.UID // 稳定兜底（洗牌后此项几乎不触发）
+		return ws[i].e.a.UID < ws[j].e.a.UID // Стабильный фолбэк (после шафла почти не срабатывает)
 	})
 	cands = cands[:0]
 	for _, c := range ws {
 		cands = append(cands, c.e)
 	}
-	// candsAll 保留截断前的全候选（权重降序），供 LRU 兜底在全量范围选最旧者，
-	// 避免 top5 字典序截断把等权重靠后账号饿死（惊群根因之一）。
+	// candsAll Сохранить полный список кандидатов до усечения (по убыванию веса) для LRU Фолбэк: выбирать самый старый во всём объёме,
+	// Избежать top5 Лексикографическое усечение вызывает голодание аккаунтов с равным весом в конце списка (одна из причин thundering herd).
 	candsAll := cands
 	if len(cands) > 5 {
 		cands = cands[:5]
 	}
 	var e *entry
-	// 防并发撞号：在持锁内基于「上次选中时刻」过滤，但同一批并发 goroutine 会串行进入
-	// 本函数（写锁），每个进入者都把 lastUsed 置为 now —— 于是同一瞬间的第 2..N 个
-	// 进入者看到前一个账号 lastUsed==now（距今 0 < minPickGap），被自然挤向其他账号。
-	// 关键：lastUsed 在锁内赋值，使时间窗口判定在并发下可重入。
+	// защита от коллизии аккаунтов при конкурентности: фильтрация под локом по "моменту последнего выбора», но один батч конкурентных goroutine будет входить последовательно
+	// данная функция (write-lock), каждый входящий lastUsed установить в now —— Тогда N-й в тот же момент 2..N шт.
+	// Входящий видит предыдущий аккаунт lastUsed==now（Давность 0 < minPickGap），естественно вытесняется на другие аккаунты.
+	// Ключевое:lastUsed Присваивание под блокировкой, чтобы проверка временного окна была реентерабельна при конкурентности.
 	eligible := make([]*entry, 0, len(cands))
 	for _, c := range cands {
 		if now.Sub(c.lastUsed) >= minPickGap {
@@ -207,10 +207,10 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 		}
 	}
 	if len(eligible) == 0 {
-		// top5 全部刚被用过：LRU 兜底，在**全候选 candsAll**（非仅 top5）里选最旧者。
-		// 用 usedSeq 单调序号而非 lastUsed 墙钟比较：Windows 等平台 time.Now() 精度
-		// ~0.5ms，快速连续选号时所有 lastUsed 完全相等，Before 全 false 会恒选
-		// candsAll[0] 导致集中。usedSeq 严格全序，与时间精度无关。
+		// top5 все только что использованы:LRU Фолбэк, в**все кандидаты candsAll**（не только top5）Выбрать самый старый из.
+		// использовать usedSeq Монотонный sequence number, а не lastUsed Сравнение по wall-clock:Windows и др. платформы time.Now() Точность
+		// ~0.5ms，все при быстром последовательном выборе номеров lastUsed Полное совпадение,Before весь false Будет всегда выбирать
+		// candsAll[0] приводит к скученности.usedSeq Строгий полный порядок, не зависит от точности времени.
 		e = candsAll[0]
 		for _, c := range candsAll[1:] {
 			if c.usedSeq < e.usedSeq {
@@ -218,34 +218,34 @@ func (p *Pool) pick(tried map[string]bool, reqModel, realm string) *auth.Auth {
 			}
 		}
 	} else {
-		e = p.pickWeighted(eligible) // eligible 保序 = top5 降序子集
+		e = p.pickWeighted(eligible) // eligible Сохранение порядка = top5 убывающее подмножество
 	}
 	if explored {
-		// 探索事件日志（可观测性）：选中号此时才确定，故在选中点打出。
-		// 毕业结果由相邻的既有日志闭环（免费号无日志、收费号走 NoteModelCost
-		// 常规路径）。
+		// Журнал событий исследования (наблюдаемость): выбранный номер определяется только сейчас, поэтому лог в точке выбора.
+		// результат выпуска замыкается соседними существующими логами (у бесплатных — без логов, у платных — через NoteModelCost
+		// штатный путь).
 		log.Printf("[pool] cost explore model=%s realm=%q acct=%s window=%s",
 			reqModel, realm, logfmt.Label(e.a.UID, e.a.Nickname), p.costExploreInterval)
 	}
-	e.lastUsed = now // 锁内即时标记：下一个进入 pick 的 goroutine 立即看到本号已用
+	e.lastUsed = now // Мгновенная пометка под блокировкой: следующий входящий pick goroutine Сразу видно, что номер уже использован
 	p.pickSeq++
-	e.usedSeq = p.pickSeq // 单调序号：保证 usedSeq 严格全序（防惊群/LRU 的权威依据）
+	e.usedSeq = p.pickSeq // Монотонный sequence: гарантирует usedSeq строгий тотальный порядок (защита от thundering herd/LRU авторитетное основание)
 	return e.a
 }
 
-// floorBlockedForModel 积分保底拦截判定（pick 普通轮换与 PickByUIDForModel 粘性
-// 路径的单一事实来源）：floor>0 且账号触底（credits < floor）且该模型在此账号上
-// **实测收费**（tier 2 有效观测）时为真。
+// floorBlockedForModel Проверка блокировки гарантированного минимума баллов (pick Обычная ротация и PickByUIDForModel Липкость
+// единственный источник истины для пути):floor>0 и аккаунт исчерпан (credits < floor）и данная модель на этом аккаунте
+// **Платность подтверждена тестами**（tier 2 при наличии валидного наблюдения) — true.
 //
-//   - tier 0（免费）不拦：保底的目的恰是「留余额给免费模型用」，免费请求
-//     credit=0 不再扣减余额（NoteModelCost）。
-//   - tier 1（无观测/观测过期）不拦：第一笔成功即入账毕业；若拦了，账本过期
-//     （modelCostTTL 6h）或重启清零后触底号会被永久锁死在「学不回来」的死锁里。
-//   - model 为空（无模型上下文）不拦：无成本维度，floor 无从判收费。
+// - tier 0（бесплатно) не блокировать: резерв как раз "оставить баланс для бесплатных моделей», бесплатный запрос
+// credit=0 больше не списывать баланс (NoteModelCost）。
+// - tier 1（нет наблюдений/истечение наблюдения) не блокировать: первый успех — зачет и выпуск; если заблокировано — журнал просрочен
+// （modelCostTTL 6h）или после сброса при рестарте исчерпанные аккаунты навсегда зависнут в дедлоке "невозможно переучиться».
+// - model пусто (без контекста модели) — не блокировать: нет измерения стоимости,floor Невозможно определить тарификацию.
 //
-// 余额用本地插值口径（签到权威值 - 每笔 usage.credit 实扣，见 NoteModelCost）：
-// 只会偏低不会偏高（官方对账延迟方向安全），正是保底需要的安全方向。
-// 调用方必须已持有 p.mu（读 e.credits / e.modelCost）。
+// Баланс по локальной интерполяции (авторитетное значение чекина - Каждая транзакция usage.credit Фактическое списание, см. NoteModelCost）：
+// Только занижение, не завышение (задержка сверки у официалов безопасна), именно безопасное направление для гарантии минимума.
+// вызывающая сторона должна уже удерживать p.mu（Чтение e.credits / e.modelCost）。
 func (p *Pool) floorBlockedForModel(e *entry, model string, now time.Time) bool {
 	if p.creditFloor <= 0 || model == "" || e.credits >= p.creditFloor {
 		return false
@@ -254,10 +254,10 @@ func (p *Pool) floorBlockedForModel(e *entry, model string, now time.Time) bool 
 	return ok && mc.CostPer1k > 0
 }
 
-// pickEarliestExpiryLocked 全冷却兜底：在非禁用的软冷却/熔断账号中选截止最早的一个。
-// 分级：disabled 永不参与；CoolHard（余额耗尽，等签到的号）同样排除——调了必 402，浪费轮换并产生噪音日志；
-// CoolSoft 与熔断号允许参与（可能已恢复，失败成本仅一轮换）。
-// 被 tried 排除、在途占满的账号同样跳过（维持请求级轮换 + 租约语义）。无任何可用返回 nil。
+// pickEarliestExpiryLocked фолбэк полного охлаждения: при неотключенном мягком охлаждении/из аккаунтов вОтключение выбрать с самым ранним дедлайном.
+// уровни:disabled никогда не участвует;CoolHard（аккаунты с исчерпанным балансом, ожидающие чекина) также исключаются — при вызове обязательно 402，трата ротации и шумовые логи;
+// CoolSoft и номера в circuit-breaker допускаются к участию (возможно уже восстановились, цена ошибки — одна ротация).
+// Получено tried Исключение, занятые in-flight аккаунты также пропускаются (сохранение ротации на уровне запроса + семантика лиза). Нет доступных — вернуть nil。
 func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, realm string) *auth.Auth {
 	var best *entry
 	for uid, e := range p.byUID {
@@ -265,13 +265,13 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 			continue
 		}
 		if realm != "" && e.a.Realm() != realm {
-			continue // 域过滤：池内跨 realm 的冷却账号不参与本 realm 兜底
+			continue // фильтр по домену: кросс- в пуле realm Аккаунты в cooldown не участвуют в данном realm Фолбэк
 		}
 		if e.disabled {
-			continue // 禁用的账号永不参与兜底
+			continue // отключенные аккаунты никогда не участвуют в фолбэке
 		}
 		if e.coolKind == CoolHard && !e.until.IsZero() && now.Before(e.until) {
-			continue // 余额耗尽号（处于有效 hard 冷却期）不参与兜底：等签到恢复，调了必 402
+			continue // Номер с исчерпанным балансом (в состоянии активен hard период кулдауна) не участвует в фолбэке: ждать восстановления чекина, вызов обязательно 402
 		}
 		if p.inFlightFull(e) {
 			continue
@@ -289,17 +289,17 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 	}
 	log.Printf("WARN: [pool] fallback_earliest_expiry acct=%s until=%s kind=%s", logfmt.Label(best.a.UID, best.a.Nickname), best.expiry(now).Format(time.RFC3339), best.fallbackKind(now))
 	best.lastUsed = time.Now()
-	// 兜底同样是「选中」，必须与 pick() 正常路径、粘性命中路径（PickByUIDForModel）
-	// 一样推进 usedSeq/pickSeq：否则被兜底反复选中的账号 usedSeq 恒为 0，在 pick 的
-	// LRU 兜底（按 usedSeq 取最旧）眼里永远是「最旧」，刚被用过就被立刻再选——
-	// 防集中/防惊群失效（entry.usedSeq 契约：每次被选中时取 p.pickSeq 自增值）。
+	// фолбэк тоже "выбран», должен совпадать с pick() обычный путь, путь sticky-попадания (PickByUIDForModel）
+	// продвигать аналогично usedSeq/pickSeq：иначе аккаунт, многократно выбираемый fallback-ом usedSeq Всегда равно 0，В pick 
+	// LRU Фолбэк (по usedSeq взять самый старый) в глазах всегда "самый старый», только что использованный сразу выбирается снова —
+	// защита от концентрации/Защита от thundering herd не сработает (entry.usedSeq Контракт: при каждом выборе брать p.pickSeq автоинкремент).
 	p.pickSeq++
 	best.usedSeq = p.pickSeq
 	return best.a
 }
 
-// inFlightFull 报告账号是否已占满在途名额（上限按 realm 分档，见 inFlightLimit；
-// limit=0 不限 → 恒 false）。调用方需已持 p.mu（读锁或写锁均可，本方法只读上限）。
+// inFlightFull Сообщить, исчерпал ли аккаунт лимит in-flight слотов (лимит по realm уровни, см. inFlightLimit；
+// limit=0 без ограничений → Конст. false）。вызывающая сторона должна уже удерживать p.mu（подойдет read-lock или write-lock, метод только читает лимит).
 func (p *Pool) inFlightFull(e *entry) bool {
 	limit := p.inFlightLimit(e)
 	if limit <= 0 {
@@ -308,20 +308,20 @@ func (p *Pool) inFlightFull(e *entry) bool {
 	return e.inFlight.Load() >= int64(limit)
 }
 
-// minPickGap 防并发撞号窗口：同一账号在该窗口内不重复被选中（除非 top5 全部刚被用过）。
-// 生产默认 100ms；纯加权分布测试可临时置 0 关闭防撞号。
+// minPickGap окно защиты от конкурентного коллизии номеров: один аккаунт не выбирается повторно в этом окне (кроме top5 все только что использованы).
+// Продовый дефолт 100ms；для теста чисто взвешенного распределения можно временно установить 0 закрыть антиколлизионный номер.
 var minPickGap = 100 * time.Millisecond
 
-// pickWeighted 加权随机（claude-api selectWeightedRandom 参考口径）：
+// pickWeighted Взвешенный рандом (claude-api selectWeightedRandom эталонный критерий):
 //
-//		weight = credits 比例 × 10 + idleWeight
+//		weight = credits доля × 10 + idleWeight
 //
-//	  - credits 比例 = 该号 credits / 候选集内最大 credits（避免量纲爆炸）
-//	  - idleWeight = min(距 lastUsed 小时数 × idleWeightPerHour, idleWeightMax)；从未使用给满分
+//	 - credits доля = Данный аккаунт credits / Максимум внутри кандидат-сета credits（во избежание взрыва размерности)
+//	 - idleWeight = min(Расстояние lastUsed количество часов × idleWeightPerHour, idleWeightMax)；Неиспользованным — максимальный балл
 //
-// credits 全 0 时仍按 idleWeight 加权（不退化均匀随机）。
-// 权重为浮点，用 int64 定点（×1e6）抽签可保持确定性随机源注入（randInt64N 语义不变）。
-// 随机源优先用 p.randInt64N（仅供测试注入确定性），nil 时回退 math/rand/v2 全局源。
+// credits весь 0 при этом всё равно по idleWeight Взвешенно (без вырождения в равномерное распределение).
+// Вес — float, использовать int64 фиксированная точка (×1e6）жеребьёвка с сохранением инъекции детерминированного источника случайности (randInt64N семантика неизменна).
+// Источник энтропии — приоритетное использование p.randInt64N（только для детерминизма тестовой инъекции),nil откат при math/rand/v2 глобальный источник.
 func (p *Pool) pickWeighted(cands []*entry) *entry {
 	now := time.Now()
 	var maxCredits int64
@@ -330,7 +330,7 @@ func (p *Pool) pickWeighted(cands []*entry) *entry {
 			maxCredits = e.credits
 		}
 	}
-	const scale = 1_000_000 // 定点放大：int64 累加权重大整数抽签
+	const scale = 1_000_000 // точечное увеличение:int64 взвешенная лотерея с накоплением веса (целые числа)
 	weights := make([]int64, len(cands))
 	var total int64
 	for i, e := range cands {
@@ -356,16 +356,16 @@ func (p *Pool) pickWeighted(cands []*entry) *entry {
 	return cands[len(cands)-1]
 }
 
-// weightOf 计算单个账号的普通加权分值。
+// weightOf вычислить обычный взвешенный скор одного аккаунта.
 func (p *Pool) weightOf(e *entry, maxCredits int64, now time.Time) float64 {
 	w := 1.0
-	// 1. credits 比例 ×10（会计入 mid-credit 锚点，避免全员 0 时 credits 项为 0）。
+	// 1. credits доля ×10（будет учтено в mid-credit якорь, избежать затрагивания всех 0 Время credits элемент — 0）。
 	if maxCredits > 0 {
 		w += float64(e.credits) / float64(maxCredits) * 10
 	}
-	// 2. 闲置补偿。
+	// 2. Компенсация простоя.
 	if e.lastUsed.IsZero() {
-		w += p.idleWeightMax // 从未使用 → 满分
+		w += p.idleWeightMax // Не использовался → максимум баллов
 	} else {
 		hours := now.Sub(e.lastUsed).Hours()
 		idleW := hours * p.idleWeightPerHour
@@ -373,17 +373,17 @@ func (p *Pool) weightOf(e *entry, maxCredits int64, now time.Time) float64 {
 			idleW = p.idleWeightMax
 		}
 		if idleW < 0 {
-			idleW = 0 // lastUsed 在未来（时钟回拨）时钳 0
+			idleW = 0 // lastUsed При времени в будущем (откат часов) — clamp 0
 		}
 		w += idleW
 	}
-	// 3.（原「成功率 ×3」因子已删，对齐上游 success-ema-review：errTotal 是终身
-	// 累计、只增不减，成功率 = successCount/(successCount+errTotal) 会让早期出过错
-	// 的号被永久压权且永不恢复；瞬时健康信号已由冷却/熔断/连败降权承接。）
+	// 3.（исходный "процент успеха ×3」фактор удалён, выровнено с апстримом success-ema-review：errTotal Пожизненный
+	// накопительно, только инкремент, успешность = successCount/(successCount+errTotal) заставит ранее сбойный
+	// Аккаунт перманентно ограничен без восстановления; мгновенный health-сигнал покрыт кулдауном/Circuit Breaker/приём понижения веса при серии неудач.)
 	return w
 }
 
-// expiringNow 报告账号是否存在当前仍有效的快过期积分批次。
+// expiringNow Сообщить, есть ли у аккаунта действующие скоро истекающие партии баллов.
 func expiringNow(e *entry, now time.Time) bool {
 	return e.creditsExpiring > 0 &&
 		e.creditsEarliestRemaining > 0 &&
@@ -391,8 +391,8 @@ func expiringNow(e *entry, now time.Time) bool {
 		e.creditsEarliestExpiry.After(now)
 }
 
-// routingWeightOf 在普通账号权重上叠加快过期虚拟实例数量。prefer_expiring=false
-// 或账号无有效快过期批次时，实例数恒为 1，结果与旧 weightOf 完全一致。
+// routingWeightOf Поверх веса обычного аккаунта наложить количество быстро истекающих виртуальных инстансов.prefer_expiring=false
+// или при отсутствии у аккаунта валидных скоро-истекающих партий число инстансов всегда = 1，Результат и старый weightOf полностью совпадает.
 func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time) float64 {
 	w := p.weightOf(e, maxCredits, now)
 	if p.preferExpiring && expiringNow(e, now) {
@@ -401,4 +401,4 @@ func (p *Pool) routingWeightOf(e *entry, maxCredits int64, now time.Time) float6
 	return w
 }
 
-// SetCredits 更新账号余额。
+// SetCredits Обновить баланс аккаунта.

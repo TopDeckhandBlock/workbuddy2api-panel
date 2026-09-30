@@ -9,7 +9,7 @@ import (
 )
 
 func TestMPEventBase(t *testing.T) {
-	a := &auth.Auth{UID: "u-1", Nickname: "测试"}
+	a := &auth.Auth{UID: "u-1", Nickname: "Тест"}
 	base := mpEventBase(a)
 	for _, k := range []string{"ideType", "extName", "ideName", "platform", "userId"} {
 		if _, ok := base[k]; !ok {

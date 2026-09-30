@@ -13,8 +13,8 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 )
 
-// captureStdout 重定向 os.Stdout（连同 chatLogOut，见 SetChatLogOutput 的注入点）
-// 并捕获 fn 期间的全部输出。
+// captureStdout Перенаправление os.Stdout（вместе с chatLogOut，См. SetChatLogOutput точка инъекции)
+// и перехватить fn Весь вывод за период.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
@@ -33,8 +33,8 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(raw)
 }
 
-// withChatLog 临时开启聊天表格日志（TestMain 默认关闭），测试结束后恢复。
-// 仅供断言表格行输出的用例使用。
+// withChatLog Временно включить лог таблицы чатов (TestMain по умолчанию выключено), восстановить после теста.
+// Только для кейсов проверки вывода строк таблицы.
 func withChatLog(t *testing.T) {
 	t.Helper()
 	old := chatLogEnabled
@@ -44,7 +44,7 @@ func withChatLog(t *testing.T) {
 
 func TestChatStatsReaderTokensFromUsage(t *testing.T) {
 	r := newChatStatsReaderSince(strings.NewReader(sseOK), time.Now())
-	// 保证 TTFB 跨过时钟粒度：Windows 上纯内存读取不足 1ms，time.Since 可能取 0。
+	// Гарантировать TTFB через гранулярность часов:Windows чистого чтения из памяти сверху недостаточно 1ms，time.Since Возможно взять 0。
 	time.Sleep(3 * time.Millisecond)
 	if _, err := io.Copy(io.Discard, r); err != nil {
 		t.Fatalf("copy: %v", err)
@@ -117,8 +117,8 @@ func TestRequestMetricsRecordsStream(t *testing.T) {
 	})
 	reqLog := reqlog.New(reqlog.Config{})
 	h := NewHandler(Config{
-		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
-		Upstream:   up,
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
 		RequestLog: reqLog,
 	})
 	rec := httptest.NewRecorder()
@@ -141,16 +141,16 @@ func TestRequestMetricsRecordsStream(t *testing.T) {
 	}
 }
 
-// 调用来源必须进归档事件：X-Forwarded-For 首段（反代后真实客户端）+ 截断后的 UA。
+// источник вызова должен попасть в архивное событие:X-Forwarded-For Первый сегмент (реальный клиент за reverse proxy)+ После усечения UA。
 func TestRequestMetricsCapturesClientInfo(t *testing.T) {
 	up := newFakeUpstream(t, func(string) (int, string, bool) {
 		return 200, sseOK, true
 	})
 	reqLog := reqlog.New(reqlog.Config{})
 	h := NewHandler(Config{
-		Pool:             testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
-		Upstream:         up,
-		RequestLog:       reqLog,
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
+		RequestLog: reqLog,
 		RecordClientInfo: true,
 	})
 	req := httptest.NewRequest("POST", "/v1/chat/completions",
@@ -174,15 +174,15 @@ func TestRequestMetricsCapturesClientInfo(t *testing.T) {
 	}
 }
 
-// 开关关闭时不采集来源（归档里不出现 IP/UA），但请求指标照常记录。
+// При выкл. переключателе источник не собирается (в архиве не появляется IP/UA），но метрики запросов пишутся как обычно.
 func TestRequestMetricsClientInfoDisabled(t *testing.T) {
 	up := newFakeUpstream(t, func(string) (int, string, bool) {
 		return 200, sseOK, true
 	})
 	reqLog := reqlog.New(reqlog.Config{})
 	h := NewHandler(Config{
-		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
-		Upstream:   up,
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
 		RequestLog: reqLog,
 	})
 	req := httptest.NewRequest("POST", "/v1/chat/completions",
@@ -202,14 +202,14 @@ func TestRequestMetricsClientInfoDisabled(t *testing.T) {
 	}
 }
 
-// 无代理头时回落到 TCP 对端地址——直连部署下这是唯一来源线索。
+// при отсутствии proxy-заголовка fallback на TCP Адрес пира — при прямом деплое это единственный индикатор источника.
 func TestClientIPForLogFallsBackToRemoteAddr(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	req.RemoteAddr = "198.51.100.9:54321"
 	if got := clientIPForLog(req); got != "198.51.100.9" {
 		t.Errorf("got %q want 198.51.100.9", got)
 	}
-	// 代理头优先（X-Real-IP 兜底 XFF）。
+	// приоритет заголовка прокси (X-Real-IP Фолбэк XFF）。
 	req.Header.Set("X-Real-IP", "192.0.2.5")
 	if got := clientIPForLog(req); got != "192.0.2.5" {
 		t.Errorf("X-Real-IP got %q want 192.0.2.5", got)
@@ -223,7 +223,7 @@ func TestClientIPForLogFallsBackToRemoteAddr(t *testing.T) {
 	}
 }
 
-// 超长 UA 落盘前截断：UA 是客户端可控自由文本，不截断会把归档行撑爆。
+// Сверхдлинный UA Обрезка перед записью на диск:UA — свободный текст под контролем клиента, без усечения раздует строку архива.
 func TestCaptureClientInfoTruncatesUserAgent(t *testing.T) {
 	tr := &requestTrace{}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -242,8 +242,8 @@ func TestRequestMetricsDetectsStreamErrorFrame(t *testing.T) {
 	})
 	reqLog := reqlog.New(reqlog.Config{})
 	h := NewHandler(Config{
-		Pool:       testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
-		Upstream:   up,
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
 		RequestLog: reqLog,
 	})
 	rec := httptest.NewRecorder()
@@ -334,13 +334,13 @@ func TestLogChatRowExtendedFields(t *testing.T) {
 			t.Errorf("extended row missing %q:\n%s", want, out)
 		}
 	}
-	// 来源未采集时不追加 src 段（旧行格式不变，方便既有日志解析脚本继续工作）。
+	// если источник не собран — не добавлять src сегмент (формат старых строк не меняется, для совместимости со скриптами парсинга логов).
 	if strings.Contains(out, "src=") {
 		t.Errorf("empty source must not add src field:\n%s", out)
 	}
 }
 
-// 调用来源必须落进流水行：IP 用裸值，UA 用 ShortUA 压缩后的客户端标签。
+// Источник вызова должен попасть в строку лога:IP использовать голое значение,UA использовать ShortUA Сжатый клиентский тег.
 func TestLogChatRowSourceFields(t *testing.T) {
 	withChatLog(t)
 	out := captureStdout(t, func() {
@@ -353,13 +353,13 @@ func TestLogChatRowSourceFields(t *testing.T) {
 			t.Errorf("source row missing %q:\n%s", want, out)
 		}
 	}
-	// 完整浏览器 UA 不该整段铺进流水行（只留客户端标签）。
+	// Полный браузер UA Не выводить весь фрагмент в строку лога (оставлять только клиентский тег).
 	if strings.Contains(out, "AppleWebKit") {
 		t.Errorf("full UA leaked into row:\n%s", out)
 	}
 }
 
-// 只有 IP 没有 UA（非浏览器客户端不带头）时，UA 列显示 "-"，IP 照常展示。
+// только IP Отсутствует UA（небраузерный клиент не отправляет заголовок),UA Отображение столбца "-"，IP Отображается как обычно.
 func TestLogChatRowSourcePartial(t *testing.T) {
 	withChatLog(t)
 	out := captureStdout(t, func() {
@@ -396,7 +396,7 @@ func TestChatLogsStreamRow(t *testing.T) {
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
 		Upstream: up,
 	})
 	out := captureStdout(t, func() {
@@ -423,7 +423,7 @@ func TestChatLogsSyncRowTTFBDash(t *testing.T) {
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
 		Upstream: up,
 	})
 	out := captureStdout(t, func() {

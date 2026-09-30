@@ -1,4 +1,4 @@
-// logging.go 请求级表格日志：每个 /v1/chat/completions 请求结束后打印一行到 stdout。
+// logging.go табличный лог уровня запроса: каждый /v1/chat/completions После завершения запроса вывести строку в stdout。
 package server
 
 import (
@@ -19,54 +19,54 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
-// maxUserAgentLen 归档与面板展示保留的 UA 字节上限。UA 是客户端完全可控的
-// 自由文本（浏览器动辄 150+ 字符，恶意客户端可以塞几 KB），落盘前必须截断，
-// 否则一条请求就能把归档行撑大。截断只影响展示，不影响请求处理。
+// maxUserAgentLen архив и отображение на панели сохраняют UA Лимит в байтах.UA полностью контролируется клиентом
+// Свободный текст (браузер часто 150+ символов, вредоносный клиент может вставить несколько KB），Перед сбросом на диск необходимо усечение,
+// Иначе один запрос может раздуть архивную строку. Усечение влияет только на отображение, не на обработку запроса.
 const maxUserAgentLen = 200
 
-// chatSeq 进程级请求序号。
+// chatSeq Порядковый номер запроса на уровне процесса.
 var chatSeq atomic.Int64
 
-// chatLogEnabled 聊天表格日志总开关。生产恒 true；
-// 测试包经 TestMain 置 false 关闭 stdout 噪音，需要断言行输出的测试用 withChatLog 临时开启（R5）。
+// chatLogEnabled Главный переключатель логов таблицы чатов. На проде всегда true；
+// Тестовый пакет через TestMain Установить false Закрыть stdout шум, нужен тест с ассертом вывода строк withChatLog временное включение (R5）。
 var chatLogEnabled = true
 
-// chatLogOut 聊天表格日志的输出目标。生产默认 os.Stdout；main 在启用管理面板时
-// 经 SetChatLogOutput 注入 MultiWriter，把每行镜像进 /panel/api/logs 的环形缓冲，
-// stdout 行为不变。需在开始服务前调用一次（无并发竞争窗口）。
+// chatLogOut Цель вывода табличного лога чата. По умолчанию в проде os.Stdout；main При включении панели управления
+// Через SetChatLogOutput инжект MultiWriter，Зеркалировать каждую строку в /panel/api/logs кольцевой буфер,
+// stdout Поведение не меняется. Вызвать один раз до старта сервиса (без окна гонки).
 var chatLogOut io.Writer = os.Stdout
 
-// SetChatLogOutput 替换聊天表格日志输出目标（仅 main 启动期调用一次）。
+// SetChatLogOutput Заменить цель вывода логов таблицы чата (только main вызывается один раз на старте).
 func SetChatLogOutput(w io.Writer) { chatLogOut = w }
 
-// chatStat 单个 chat 请求的日志统计；handler 挂 defer，请求出口后落一行。
+// chatStat одиночный chat Статистика логов запросов;handler Монтировать defer，после выхода запроса логировать строку.
 type chatStat struct {
-	start            time.Time
-	model            string
-	mode             string // "stream" | "sync"
-	uid              string // 完整 uid，展示时只取前 8 位
-	nick             string // 账号昵称（随选号同步），流水行经 logfmt.Label 拼成 "昵称(uid8)"
-	ttfb             time.Duration
-	toks             int // <0 表示 usage 缺失 → 显示 "-"
-	status           int
-	requestID        string
-	outcome          string
-	attempts         int
-	credit           float64
-	hasCredit        bool
-	promptTokens     int64
+	start time.Time
+	model string
+	mode string // "stream" | "sync"
+	uid string // Полный uid，При отображении брать только первые 8 бит
+	nick string // ник аккаунта (синхронно с выбором), строка пайплайна проходит logfmt.Label Склеить в "никнейм(uid8)"
+	ttfb time.Duration
+	toks int // <0 обозначает usage отсутствует → Отображение "-"
+	status int
+	requestID string
+	outcome string
+	attempts int
+	credit float64
+	hasCredit bool
+	promptTokens int64
 	completionTokens int64
-	totalTokens      int64
+	totalTokens int64
 
-	// 调用来源（客户端 IP / User-Agent）。空 = 未采集（logging.request_client_info
-	// 关闭，或非 chat 路径），展示层一律以 "-" 兜底。
-	clientIP  string
+	// источник вызова (клиент IP / User-Agent）。пустой = не собрано (logging.request_client_info
+	// Закрыто, или не chat путь), на уровне отображения всегда как "-" Фолбэк.
+	clientIP string
 	userAgent string
 
 	logged bool
 }
 
-// newChatStat 以请求进入 handler 的时刻为起点构造统计对象；toks 默认 -1（usage 缺失）。
+// newChatStat Вход по запросу handler момент как начало для построения объекта статистики;toks По умолчанию -1（usage отсутствует).
 func newChatStat(now time.Time, body []byte, stream bool) *chatStat {
 	mode := "sync"
 	if stream {
@@ -75,7 +75,7 @@ func newChatStat(now time.Time, body []byte, stream bool) *chatStat {
 	return &chatStat{start: now, model: parseModelFromBody(body), mode: mode, toks: -1}
 }
 
-// done 幂等落一行表格日志。
+// done Идемпотентно пишет одну строку табличного лога.
 func (s *chatStat) done() {
 	if s.logged {
 		return
@@ -85,57 +85,57 @@ func (s *chatStat) done() {
 		s.requestID, s.outcome, s.attempts, s.credit, s.hasCredit, s.clientIP, s.userAgent)
 }
 
-// chatStatsReader 在流式透传时抓取 SSE 末帧的 usage.completion_tokens 精确值，
-// 并记录首个 data 帧的 TTFB；原始字节原样返回给下游透传。
-// 注意：不做 rune 估算，token 数一律采信上游 usage。
+// chatStatsReader Захват при стриминговой прокси-передаче SSE последнего кадра usage.completion_tokens точное значение,
+// и записать первый data кадра TTFB；Исходные байты возвращаются downstream как есть (прозрачно).
+// внимание: не делать rune оценка,token числа полностью берутся из апстрима usage。
 type chatStatsReader struct {
-	br                  *bufio.Reader
-	start               time.Time
-	ttfb                time.Duration
-	seen                bool // 已见过首个 data 帧（TTFB 只记一次）
-	promptTokens        int
-	completionTokens    int
-	totalTokens         int
-	hasPromptTokens     bool
+	br *bufio.Reader
+	start time.Time
+	ttfb time.Duration
+	seen bool // уже встречался первый data Кадр (TTFB учитывается только один раз)
+	promptTokens int
+	completionTokens int
+	totalTokens int
+	hasPromptTokens bool
 	hasCompletionTokens bool
-	hasTotalTokens      bool
-	// credit 上游末帧 usage.credit（本次真实扣费积分），供成本台账（NoteModelCost）。
-	hasCredit  bool
-	credit     float64
+	hasTotalTokens bool
+	// credit последний фрейм upstream usage.credit（фактически списанные баллы за этот раз), для учёта стоимости (NoteModelCost）。
+	hasCredit bool
+	credit float64
 	errorFrame bool
-	pend       []byte // 已读未返回的行缓存
+	pend []byte // Кэш прочитанных, но не возвращенных строк
 }
 
-// newChatStatsReaderSince 以 since 为 TTFB 计时起点（通常是请求进入 handler 的时刻）。
+// newChatStatsReaderSince по since для TTFB Начало отсчёта (обычно вход запроса в handler момент).
 func newChatStatsReaderSince(r io.Reader, since time.Time) *chatStatsReader {
 	return &chatStatsReader{br: bufio.NewReaderSize(r, 64*1024), start: since}
 }
 
-// TTFB 返回首个 data 帧到达耗时；无帧时为 0。
+// TTFB Вернуть первый data время доставки кадра; при отсутствии кадра — 0。
 func (s *chatStatsReader) TTFB() time.Duration { return s.ttfb }
 
-// Tokens 返回末帧 usage.completion_tokens 与是否缺失；无 usage 时 ok=false。
+// Tokens вернуть последний кадр usage.completion_tokens и отсутствие; отсутствует usage Время ok=false。
 func (s *chatStatsReader) Tokens() (int, bool) { return s.completionTokens, s.hasCompletionTokens }
 
-// Credit 返回末帧 usage.credit（本次真实扣费积分）与是否缺失。
+// Credit вернуть последний кадр usage.credit（фактически списанные баллы за этот раз) и наличие пропуска.
 func (s *chatStatsReader) Credit() (float64, bool) { return s.credit, s.hasCredit }
 
-// TotalTokens 返回末帧 usage.total_tokens 与是否缺失。
+// TotalTokens вернуть последний кадр usage.total_tokens И наличие/отсутствие.
 func (s *chatStatsReader) TotalTokens() (int, bool) { return s.totalTokens, s.hasTotalTokens }
 
-// Usage 返回流式响应中已收到的 token usage 字段。
+// Usage вернуть уже полученное в стриминговом ответе token usage Поле.
 func (s *chatStatsReader) Usage() pool.TokenUsageDelta {
 	return pool.TokenUsageDelta{
-		HasPromptTokens:     s.hasPromptTokens,
-		PromptTokens:        int64(s.promptTokens),
+		HasPromptTokens: s.hasPromptTokens,
+		PromptTokens: int64(s.promptTokens),
 		HasCompletionTokens: s.hasCompletionTokens,
-		CompletionTokens:    int64(s.completionTokens),
-		HasTotalTokens:      s.hasTotalTokens,
-		TotalTokens:         int64(s.totalTokens),
+		CompletionTokens: int64(s.completionTokens),
+		HasTotalTokens: s.hasTotalTokens,
+		TotalTokens: int64(s.totalTokens),
 	}
 }
 
-// parseSSELine 解析一行 "data: {...}"：首帧记 TTFB，含 usage 时采信精确 completion_tokens。
+// parseSSELine парсить строку "data: {...}"：Первый кадр — запись TTFB，Содержит usage тогда доверять точному completion_tokens。
 func (s *chatStatsReader) parseSSELine(line string) {
 	line = strings.TrimRight(line, "\r\n")
 	if !strings.HasPrefix(line, "data: ") {
@@ -152,10 +152,10 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	var chunk struct {
 		Error json.RawMessage `json:"error"`
 		Usage *struct {
-			PromptTokens     *int     `json:"prompt_tokens"`
-			CompletionTokens *int     `json:"completion_tokens"`
-			TotalTokens      *int     `json:"total_tokens"`
-			Credit           *float64 `json:"credit"`
+			PromptTokens *int `json:"prompt_tokens"`
+			CompletionTokens *int `json:"completion_tokens"`
+			TotalTokens *int `json:"total_tokens"`
+			Credit *float64 `json:"credit"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
@@ -185,10 +185,10 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 }
 
-// SawErrorFrame 报告流中是否透传过 SSE error 帧。
+// SawErrorFrame было ли прокинуто в потоке отчётов SSE error Кадр.
 func (s *chatStatsReader) SawErrorFrame() bool { return s.errorFrame }
 
-// Read 返回原始数据，同时解析统计 TTFB/token。
+// Read возврат исходных данных с одновременным разбором статистики TTFB/token。
 func (s *chatStatsReader) Read(p []byte) (int, error) {
 	if len(s.pend) > 0 {
 		n := copy(p, s.pend)
@@ -206,8 +206,8 @@ func (s *chatStatsReader) Read(p []byte) (int, error) {
 	return 0, err
 }
 
-// rewriteModel 把 outbound chat body 的 model 字段替换为 bare（保留其余字段原样）。
-// 仅当 bare != 原 model 时由 chatCompletions 调用；body 不可解析时原样返回（不二次错误化）。
+// rewriteModel взять outbound chat body model поле заменяется на bare（остальные поля сохранить как есть).
+// только если bare != Исходный model в момент — от chatCompletions вызов;body при невозможности парсинга вернуть как есть (без повторной ошибкизации).
 func rewriteModel(body []byte, bare string) []byte {
 	if len(body) == 0 || bare == "" {
 		return body
@@ -227,7 +227,7 @@ func rewriteModel(body []byte, bare string) []byte {
 	return out
 }
 
-// parseModelFromBody 从请求 JSON 取 model 字段，缺省标 "-"。
+// parseModelFromBody Из запроса JSON получить model поле, по умолчанию помечается "-"。
 func parseModelFromBody(body []byte) string {
 	var obj struct {
 		Model string `json:"model"`
@@ -238,7 +238,7 @@ func parseModelFromBody(body []byte) string {
 	return obj.Model
 }
 
-// usageDeltaFromResponse 从非流式聚合响应中提取明确存在的 token 字段。
+// usageDeltaFromResponse Извлечь явно существующее из нестримингового агрегированного ответа token Поле.
 func usageDeltaFromResponse(resp map[string]any) pool.TokenUsageDelta {
 	delta := pool.TokenUsageDelta{}
 	u, ok := resp["usage"].(map[string]any)
@@ -278,7 +278,7 @@ func usageDeltaFromResponse(resp map[string]any) pool.TokenUsageDelta {
 	return delta
 }
 
-// completionTokens 从 Aggregate 返回的响应中提取 usage.completion_tokens；缺失返回 -1。
+// completionTokens Из Aggregate извлечь из возвращенного ответа usage.completion_tokens；При отсутствии вернуть -1。
 func completionTokens(resp map[string]any) int {
 	u, ok := resp["usage"].(map[string]any)
 	if !ok {
@@ -291,27 +291,27 @@ func completionTokens(resp map[string]any) int {
 	return int(v)
 }
 
-// uidPrefix 只显示 uid 前 8 位；空 uid 显示 "-"。
+// uidPrefix показывать только uid Перед 8 бит; пусто uid Отображение "-"。
 //
-// 实现委托 logfmt.UID8，避免 "截 8 位" 的规则在 server 与 logfmt 两处各写一份而走样。
+// Делегирование реализации logfmt.UID8，Избежать "Перехват 8 бит" Правила в server и logfmt дублирование записи в двух местах искажает.
 func uidPrefix(uid string) string {
 	return logfmt.UID8(uid)
 }
 
 type requestTraceKey struct{}
 
-// requestTrace 在一次 chat 请求内共享标识与最终统计，ServeHTTP 出口统一记账。
+// requestTrace за один chat Общий идентификатор внутри запроса и итоговая статистика,ServeHTTP единый учет на выходе.
 type requestTrace struct {
-	id    string
+	id string
 	start time.Time
-	stat  *chatStat
-	// 调用来源，进入 handler 时一次性采集（见 ServeHTTP / captureClientInfo）。
-	clientIP  string
+	stat *chatStat
+	// источник вызова, вход в handler единоразовый сбор в момент (см. ServeHTTP / captureClientInfo）。
+	clientIP string
 	userAgent string
 }
 
-// captureClientInfo 采集调用来源（客户端 IP + 截断后的 UA）。开关关闭时保持空串：
-// 来源信息比 token 计数敏感，是否落盘由 logging.request_client_info 决定。
+// captureClientInfo Сбор источника вызова (клиент IP + После усечения UA）。При выкл. переключателе сохранять пустую строку:
+// Информация об источнике чем token Чувствительно к подсчёту, запись на диск определяется logging.request_client_info Решение.
 func (t *requestTrace) captureClientInfo(r *http.Request) {
 	if t == nil || r == nil {
 		return
@@ -320,12 +320,12 @@ func (t *requestTrace) captureClientInfo(r *http.Request) {
 	t.userAgent = logfmt.Truncate(r.UserAgent(), maxUserAgentLen)
 }
 
-// clientIPForLog 提取用于日志展示的客户端 IP。
+// clientIPForLog извлечь клиента для отображения в логах IP。
 //
-// 与 upstream.ExtractClientIP 的差别：后者只认代理头（X-Forwarded-For 首段 →
-// X-Real-IP），因为它的用途是把客户端 IP **透传给上游**，回落到网关自身地址会
-// 污染上游风控判据；日志场景相反——直连（无反代）时 RemoteAddr 就是唯一线索，
-// 必须回落，否则面板里所有来源都显示 "-"。代理头优先保证反代后拿到真实客户端。
+// и upstream.ExtractClientIP различие: последний распознает только прокси-заголовок (X-Forwarded-For первый сегмент →
+// X-Real-IP），т.к. его назначение — прокинуть клиент IP **прозрачно прокинуть апстриму**，откат на собственный адрес шлюза приведёт к
+// загрязняет критерии апстрим-риск-контроля; в сценарии логов наоборот — при прямом подключении (без обратного прокси) RemoteAddr — единственная зацепка,
+// необходим откат, иначе все источники на панели показывают "-"。Заголовок прокси приоритетно гарантирует получение реального клиента после reverse proxy.
 func clientIPForLog(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -340,7 +340,7 @@ func clientIPForLog(r *http.Request) string {
 	return host
 }
 
-// dashIfEmpty 空串统一显示 "-"（来源字段未采集时不留空白列）。
+// dashIfEmpty Пустые строки отображаются единообразно "-«（если поле источника не собрано, пустой столбец не оставлять).
 func dashIfEmpty(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
@@ -358,10 +358,10 @@ func requestTraceFrom(r *http.Request) *requestTrace {
 
 func (t *requestTrace) event(status int) reqlog.Event {
 	e := reqlog.Event{
-		Time:      t.start,
+		Time: t.start,
 		RequestID: t.id,
-		Path:      "/v1/chat/completions",
-		Status:    status,
+		Path: "/v1/chat/completions",
+		Status: status,
 	}
 	duration := time.Since(t.start)
 	e.DurationMs = duration.Milliseconds()
@@ -394,8 +394,8 @@ func (t *requestTrace) event(status int) reqlog.Event {
 	return e
 }
 
-// responseObserver 捕获 handler 实际写出的 HTTP 状态，同时保留 Flusher/Unwrap，
-// 避免破坏 SSE 逐帧刷新。
+// responseObserver Захват handler фактически записанное HTTP Состояние, с сохранением Flusher/Unwrap，
+// Во избежание нарушения SSE покадровое обновление.
 type responseObserver struct {
 	http.ResponseWriter
 	status int
@@ -423,33 +423,33 @@ func (o *responseObserver) Flush() {
 
 func (o *responseObserver) Unwrap() http.ResponseWriter { return o.ResponseWriter }
 
-// 请求流水行的固定列宽（显示列宽，非字节）。取固定宽度而不是让内容自然长度撑开，
-// 是为了让 stdout 里成百上千行能竖着扫——否则模型名长短不一、中文昵称按字节补空格
-// 错位，根本没法用肉眼对齐着一列列看（这正是上一版 11 字节硬截断要解决的问题）。
+// Фиксированная ширина столбца строки лога запросов (ширина отображения, не байты). Брать фиксированную ширину, а не растягивать по естественной длине контента,
+// Чтобы stdout внутри сотни-тысячи строк можно сканировать вертикально — иначе разная длина имён моделей, китайские никнеймы дополняются пробелами по байтам
+// смещение, невозможно визуально выровнять по столбцам (именно это в прошлой версии 11 проблема, решаемая жесткой обрезкой по байтам).
 const (
-	// chatModelWidth 覆盖 realm 前缀 + 最长模型名："global:" (7) + "deepseek-v4.1-flash" (19) = 26。
-	// 旧的 11 字节截断会把 "cn:deepseek-v4-flash" 切成 "cn:deepseek"，让人误以为是另一个模型。
+	// chatModelWidth перекрытие realm Префикс + Самое длинное имя модели:«global:« (7) + "deepseek-v4.1-flash« (19) = 26。
+	// Старый 11 усечение по байтам разрежет "cn:deepseek-v4-flash« Разбить на "cn:deepseek«，Можно принять за другую модель.
 	chatModelWidth = 26
-	// chatAcctWidth 容纳 "昵称(uid8)"：中文昵称按 2 列/字算，5 字中文 + "(xxxxxxxx)" = 20 列。
+	// chatAcctWidth Вмещать "никнейм(uid8)«：Китайские никнеймы по 2 Список/считать по символам,5 символов на китайском + "(xxxxxxxx)" = 20 Столбец.
 	chatAcctWidth = 22
 	chatTTFBWidth = 8
-	chatTokWidth  = 6
-	chatRateWidth = 11 // 形如 "183.6tok/s"
+	chatTokWidth = 6
+	chatRateWidth = 11 // вида "183.6tok/s"
 )
 
-// logChatRow 打印一行请求级表格日志（输出 chatLogOut，无 log 时间戳前缀）。
+// logChatRow Печать одной строки табличного лога на запрос (вывод chatLogOut，отсутствует log префикс метки времени).
 //
-// 参数：
-//   - model：模型名（含 realm 前缀），超 chatModelWidth 截断（模型名是 ASCII，字节截即列宽）；
-//   - uid/nick：完整 uid 与账号昵称，经 logfmt.Label 拼成 "昵称(uid8)" 展示——只有
-//     uid8 时人眼无法判断是哪个号，要辨认必须再查 auths/，排障多一跳；
-//   - toks<0 表示 usage 缺失，显示 "-"。
+// Параметры:
+// - model：имя модели (вкл. realm префикс), превышение chatModelWidth усечение (имя модели — ASCII，усечение по байтам = ширина колонки);
+// - uid/nick：Полный uid и ник аккаунта, через logfmt.Label Склеить в "никнейм(uid8)" отображение — только
+// uid8 визуально невозможно определить аккаунт, для идентификации нужен доп. запрос auths/，диагностика + один хоп;
+// - toks<0 обозначает usage Отсутствует, показать "-"。
 func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int) {
 	logChatRowEx(ttfb, total, model, mode, uid, nick, status, toks, "", "", 0, 0, false, "", "")
 }
 
-// logChatRowEx 是带请求 ID、结果、重试、积分与调用来源字段的扩展流水行。旧调用保持
-// 原格式；requestID 非空时才追加扩展字段；来源两参均为空时不追加来源段。
+// logChatRowEx это запрос с ID、Расширенная строка лога с полями результата, повтора, баллов и источника вызова. Старые вызовы сохраняются
+// исходный формат;requestID расширенные поля добавляются только если не пусто; если оба параметра источника пусты — сегмент источника не добавляется.
 func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int,
 	requestID, outcome string, attempts int, credit float64, hasCredit bool,
 	clientIP, userAgent string) {
@@ -458,7 +458,7 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 	}
 	seq := chatSeq.Add(1)
 	model = logfmt.Pad(logfmt.Truncate(model, chatModelWidth), chatModelWidth)
-	// 账号标签只补不截：超宽时宁可让该行变宽，也不丢昵称信息（昵称是排查的主线索）。
+	// тег аккаунта только дополняется, не усекается: при переполнении лучше расширить строку, чем потерять ник (ник — главный ключ для диагностики).
 	acct := logfmt.Pad(logfmt.Label(uid, nick), chatAcctWidth)
 	tokField := "-"
 	tokpsField := "-"
@@ -488,9 +488,9 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 		}
 		extra = fmt.Sprintf(" rid=%s | out=%s | try=%d | credit=%s |", requestID, outcome, attempts, creditField)
 	}
-	// 调用来源：IP 用可解析的裸值（便于 grep），UA 用 ShortUA 压缩后的客户端标签
-	// 并加引号（标签内可能含空格，如 `OpenAI/Python 1.30.0` 只会取到 OpenAI/Python）。
-	// 两者都未采集时不追加，旧行格式保持不变。
+	// Источник вызова:IP Использовать парсимое raw-значение (для удобства grep），UA использовать ShortUA Сжатый тег клиента
+	// и заключить в кавычки (внутри тега возможны пробелы, напр. `OpenAI/Python 1.30.0` будет получено только OpenAI/Python）。
+	// Если оба не собраны — не добавлять, формат старой строки без изменений.
 	src := ""
 	if clientIP != "" || userAgent != "" {
 		ua := "-"

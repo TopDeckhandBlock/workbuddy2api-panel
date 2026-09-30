@@ -1,8 +1,8 @@
-// transport.go 出站 Transport 构造的单一事实来源（连接层加固，吸收 kongjianguan
-// 4 连击实测经验的前三件，见 .claude/reports/fork-scan-absorb.md T-2）：
-// 真正禁 h2 / TLS 握手超时 / 短 keepalive 探测，全参数集中定义可测试可调整。
-// 第四件 DisableKeepAlives 按报告 trade-off 不吸收（每请求 TLS 握手开销与连接
-// 复用意图相反），分析见 .claude/reports/transport-hardening.md。
+// transport.go исходящий Transport единый источник истины конструкции (усиление на уровне соединения, поглощение kongjianguan
+// 4 топ-3 из опыта комбо-тестов, см. .claude/reports/fork-scan-absorb.md T-2）：
+// Реально заблокировано h2 / TLS Таймаут хендшейка / Короткий keepalive Детект, все параметры централизованы, тестируемы и настраиваемы.
+// четвёртый элемент DisableKeepAlives по отчёту trade-off не поглощать (на каждый запрос TLS Накладные расходы на handshake и соединение
+// намерение переиспользования противоположно), анализ см. .claude/reports/transport-hardening.md。
 package upstream
 
 import (
@@ -12,100 +12,100 @@ import (
 	"time"
 )
 
-// 连接层参数集中定义（与 server/backoff.go 同风格：一处定义，测试可回读断言）。
+// Параметры уровня соединения определены централизованно (с server/backoff.go в том же стиле: определение в одном месте, тест может прочитать и проверить).
 const (
-	// dialTimeout TCP 连接建立上限。半死连接的第一道闸：连不上就快速失败
-	// 轮转换号，不再干等系统 TCP 重传窗口（kongjianguan 实测半开 TCP 单次
-	// TTFB 卡 936s——默认 Dialer 无超时上限）。
+	// dialTimeout TCP Лимит установки соединений. Первый барьер для полумёртвых соединений: не подключилось — быстрый фейл
+	// ротация меняет аккаунт, без ожидания системы TCP Окно ретрансляции (kongjianguan фактически half-open TCP Однократно
+	// TTFB Карта 936s——По умолчанию Dialer без верхнего лимита таймаута).
 	dialTimeout = 10 * time.Second
-	// dialKeepAlive TCP keepalive 探测周期。默认 Dialer 2h 才发首个探测——
-	// NAT 黑洞里 2h 足够连接半死且被复用。15s 周期让死连接在 15~30s 内被
-	// 内核掐掉（RST/ETIMEDOUT），复用侧立即感知而非卡到重传窗口。
+	// dialKeepAlive TCP keepalive период зондирования. По умолчанию Dialer 2h только отправлен первый пробник —
+	// NAT В черной дыре 2h Достаточно полумертвых соединений, переиспользуются.15s период позволяет мёртвым соединениям в 15~30s внутри был
+	// ядро прибивает (RST/ETIMEDOUT），сторона переиспользования сразу обнаруживает, а не ждет окна ретрансляции.
 	dialKeepAlive = 15 * time.Second
-	// tlsHandshakeTimeout TLS 握手上限。现役此前完全缺失——握手挂起时无任何
-	// 层兜底（ResponseHeaderTimeout 只在请求写完后才计时），只能干等到
+	// tlsHandshakeTimeout TLS лимит хендшейка. Ранее полностью отсутствовал — при зависании хендшейка нет никакого
+	// уровень fallback'а (ResponseHeaderTimeout таймер только после завершения записи запроса), остается только ждать до
 	// HTTP.Client.Timeout(120s)。
 	tlsHandshakeTimeout = 10 * time.Second
-	// idleConnTimeout 空闲连接池保留时长。从 90s 收到 30s：WAF 风暴后上游
-	// NGI 常态性掐闲置连接，90s 池里的连接多半已死（kongjianguan 同款取值）；
-	// 复用侧仍有 15s keepalive 兜底识别。
+	// idleConnTimeout время удержания idle-пула соединений. С 90s получено 30s：WAF Апстрим после шторма
+	// NGI регулярное закрытие простаивающих соединений,90s Соединения в пуле по большей части мертвы (kongjianguan то же значение);
+	// на стороне переиспользования всё ещё есть 15s keepalive резервное распознавание.
 	idleConnTimeout = 30 * time.Second
-	// responseHeaderTimeout 聊天 SSE 首字节前（响应头）硬上限。从 120s 收到
-	// 60s：kongjianguan 笔记实录成功请求 TTFB 曾到 16s（慢模型冷启动），
-	// 60s ≈ 3.75× 观测最坏健康首包，留足慢冷启动余量；同时把半死连接场景的
-	// 单请求卡死从 2 分钟压到 1 分钟（MaxRotate 默认 3 次的最坏轮转从 6 分钟
-	// 压到 3 分钟）。不取 kongjianguan 的 20s：其 20s 是 DisableKeepAlives+
-	// timedConn 20s 写超时组合的取值，我们保留连接复用，须按自身慢冷启动
-	// 观测留余量。语义核对（任务书设计纪律）：ResponseHeaderTimeout 只计响应
-	// 头到达前的时长，头到达后 SSE 长流不受影响（流中空闲由 IdleTimeout 监控，
-	// 见 idle.go），不误杀长流——transport_test.go 有显式回归。
+	// responseHeaderTimeout Чат SSE жёсткий лимит до первого байта (заголовки ответа). С 120s получено
+	// 60s：kongjianguan Заметка: зафиксирован успешный запрос TTFB ранее достигало 16s（холодный старт медленной модели),
+	// 60s ≈ 3.75× Наблюдать худший healthy TTFB, оставить запас на медленный холодный старт; и сценарии полумёртвых соединений
+	// зависание одиночного запроса с 2 минут сжать до 1 минут (MaxRotate По умолчанию 3 худшая ротация за раз с 6 минут
+	// Сжать до 3 минут). Не брать kongjianguan 20s：его 20s Да DisableKeepAlives+
+	// timedConn 20s значения комбинации таймаутов записи, сохраняем reuse соединения, нужен собственный медленный cold start
+	// оставить запас для наблюдения. Семантическая сверка (дисциплина ТЗ):ResponseHeaderTimeout Учитывать только ответ
+	// длительность до прибытия заголовка, после прибытия заголовка SSE Длинный поток не затронут (простой в потоке от IdleTimeout мониторинг,
+	// См. idle.go），Не убивать длинные потоки —transport_test.go Есть явный возврат.
 	//
-	// 注意：本常量只是 newTransport 的构造默认，main.go 会按 config
-	// upstream.header_timeout_seconds 无条件覆盖。因此生产生效值 = config
-	// 解析值（未配置时 normalize 回落 timeout_seconds，默认 120），本 60s 仅作
-	// 「Config 未接线/测试裸用」时的安全网——与 config.example.json 的取值
-	// 对齐避免三处口径漂移（transport 60 / config 回落 120 / example 60）。
+	// внимание: данная константа — лишь newTransport конструктор по умолчанию,main.go Будет по config
+	// upstream.header_timeout_seconds Безусловная перезапись. Поэтому продовое эффективное значение = config
+	// Распарсенное значение (когда не настроено normalize откат timeout_seconds，По умолчанию 120），текущий 60s Только как
+	// 「Config Не подключено/страховочная сетка при "голом» тестовом использовании — и config.example.json значение
+	// выравнивание во избежание расхождения метрики в трех местах (transport 60 / config откат 120 / example 60）。
 	responseHeaderTimeout = 60 * time.Second
 )
 
-// maxIdleConns / maxIdleConnsPerHost 连接池容量（既有值，一并集中定义）。
+// maxIdleConns / maxIdleConnsPerHost Емкость пула соединений (существующее значение, определяется централизованно).
 const (
-	maxIdleConns        = 100
+	maxIdleConns = 100
 	maxIdleConnsPerHost = 20
 )
 
-// newDialer 构造出站拨号器（DialContext 的 Timeout/KeepAlive 参数集中于此，
-// 供测试回读断言）。
+// newDialer создать исходящий dialer (DialContext Timeout/KeepAlive Параметры сосредоточены здесь,
+// для assert-проверки при обратном чтении в тестах).
 func newDialer() *net.Dialer {
 	return &net.Dialer{
-		Timeout:   dialTimeout,
+		Timeout: dialTimeout,
 		KeepAlive: dialKeepAlive,
 	}
 }
 
-// newTransport 构造共享出站 Transport（HTTP 与 ChatHTTP 同一实例，连接池不重复）。
-// 分两层防半死连接：
-//   - TLS 层：空 TLSNextProto 真正禁 h2（kongjianguan 二次修正的实证：ForceAttemptHTTP2=false
-//     只对自定义 Dial 生效，默认 TLS 经 ALPN 仍协商出 h2，半死 h2 流复用表现为
-//     "http2: timeout awaiting response headers"——唯一正确写法是置空映射，让 ALPN
-//     完成后无 h2 协议可用，连接退回 HTTP/1.1）。
-//   - TCP 层：DialContext 10s 建连上限 + 15s keepalive 探测，半开连接在建立期
-//     和复用期都能被快速识别（见 dialTimeout/dialKeepAlive 注释）。
+// newTransport Сконструировать общий исходящий Transport（HTTP и ChatHTTP один экземпляр, пул соединений не дублируется).
+// Двухуровневая защита от half-dead соединений:
+// - TLS уровень: пусто TLSNextProto Реально заблокировано h2（kongjianguan эмпирика вторичной коррекции:ForceAttemptHTTP2=false
+// Только для кастомных Dial вступает в силу, по умолчанию TLS Через ALPN всё равно согласуется h2，полумертвый h2 повторное использование потока проявляется как
+// "http2: timeout awaiting response headers"——Единственный корректный способ — очистить маппинг, чтобы ALPN
+// После завершения нет h2 протокол доступен, соединение возвращается HTTP/1.1）。
+// - TCP Уровень:DialContext 10s лимит соединений + 15s keepalive проба, half-open соединение на этапе установления
+// и период реюза могут быть быстро распознаны (см. dialTimeout/dialKeepAlive комментарий).
 func newTransport() *http.Transport {
 	dialer := newDialer()
 	return &http.Transport{
 		DialContext: dialer.DialContext,
-		// 空 TLSNextProto（非 nil）真正禁 h2：见函数注释。必须 make 而非 nil——
-		// nil 表示「让标准库注入默认 h2 映射」（kongjianguan 实测：设
-		// ForceAttemptHTTP2=false 后日志仍报 h2 timeout，正是这个陷阱）。
-		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
-		TLSHandshakeTimeout:   tlsHandshakeTimeout,
-		MaxIdleConns:          maxIdleConns,
-		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-		IdleConnTimeout:       idleConnTimeout,
+		// пустой TLSNextProto（не nil）Реально заблокировано h2：См. комментарий к функции. Обязательно make а не nil——
+		// nil означает "разрешить стандартной библиотеке инжектить дефолт h2 маппинг»kongjianguan факт.: уст.
+		// ForceAttemptHTTP2=false после лог всё равно сообщает h2 timeout，именно эта ловушка).
+		TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		TLSHandshakeTimeout: tlsHandshakeTimeout,
+		MaxIdleConns: maxIdleConns,
+		MaxIdleConnsPerHost: maxIdleConnsPerHost,
+		IdleConnTimeout: idleConnTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
 }
 
-// closeIdler 实现该接口的 RoundTripper 支持清空空闲连接池（*http.Transport、
-// http2.Transport 等均满足；测试注入的自定义 RoundTripper 可选择性实现）。
+// closeIdler Реализующие данный интерфейс RoundTripper Поддержка очистки пула idle-соединений (*http.Transport、
+// http2.Transport все выполнены; кастомная тестовая инъекция RoundTripper Может быть реализовано опционально).
 type closeIdler interface {
 	CloseIdleConnections()
 }
 
-// roundTripCloseIdle 在传输层请求失败后清掉 rt 所属 Transport 的空闲连接池
-// （kongjianguan 第 4 件：失败连接可能仍留在空闲池里，等 IdleConnTimeout 才
-// 过期，下一个请求会继续捡到它）。
+// roundTripCloseIdle Очистить после сбоя запроса на транспортном уровне rt Принадлежность Transport пул idle-соединений
+// （kongjianguan № 4 : неуспешное соединение может остаться в idle-пуле, ждать IdleConnTimeout только
+// истек, следующий запрос снова его подхватит).
 //
-// 挂载点（任务书「评估挂载点：错误分类处理处」的结论）：错误分类（Classify）
-// 只见业务信封——传输层失败根本没有 body 可分类（见 doJSON/ChatStreamContext
-// 对 read body 失败的处理：不进 Classify、不罚号）。这类失败的正确处理正是
-// 连接层的池清理，故挂在与 Do 并列的传输层出口（ChatStreamContext 的 Do 错误
-// 分支），而非 applyErrorPolicy。
+// Точка монтирования (вывод ТЗ "Точка оценки: обработка классификации ошибок»): классификация ошибок (Classify）
+// Виден только бизнес-конверт — при сбое транспортного уровня вообще нет body Классифицируемо (см. doJSON/ChatStreamContext
+// Для read body Обработка ошибки: не попадает в Classify、аккаунт не штрафуется). Корректная обработка такого сбоя — это как раз
+// очистка пула уровня соединения, поэтому висит на Do параллельные egress'ы транспортного уровня (ChatStreamContext Do Ошибка
+// ветка), а не applyErrorPolicy。
 //
-// 关闭是 best-effort：rt 为 nil 或未实现 closeIdler（如测试注入的 rtFunc）时
-// 静默跳过。CloseIdleConnections 只关空闲连接，不影响在途请求；瞬时代价是
-// 下个请求多一次 TCP+TLS 握手，与半死连接被复用卡 60s 的风险完全不成比例。
+// Отключение — это best-effort：rt для nil или не реализовано closeIdler（как инжектированное в тесте rtFunc）Время
+// Тихо пропустить.CloseIdleConnections Закрывать только idle-соединения, не затрагивая in-flight запросы; мгновенная цена —
+// Следующий запрос — на один раз больше TCP+TLS Хендшейк, полумертвое соединение зависает при переиспользовании 60s риск полностью несоразмерен.
 func roundTripCloseIdle(rt http.RoundTripper) {
 	if rt == nil {
 		return

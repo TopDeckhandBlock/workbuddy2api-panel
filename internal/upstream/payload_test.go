@@ -7,54 +7,54 @@ import (
 	"testing"
 )
 
-// TestNormalizeRoles 验证出站请求体把 developer 角色归一为 system。
-// 上游 role 白名单不含 developer（OpenAI 新规范的 system 别名），
-// 命中即 HTTP 400 code=11128；此处走 PrepareBodyOptWithEfforts 全链路断言。
+// TestNormalizeRoles проверить, что тело исходящего запроса developer роли унифицированы в system。
+// апстрим role белый список не содержит developer（OpenAI нового стандарта system алиас),
+// При хите сразу HTTP 400 code=11128；здесь идет PrepareBodyOptWithEfforts Ассерты по всей цепочке.
 func TestNormalizeRoles(t *testing.T) {
 	cases := []struct {
-		name      string
-		body      string
-		wantRoles []string // 与输出 messages 逐条对应的期望 role；len 即消息数
+		name string
+		body string
+		wantRoles []string // и вывод messages Ожидание для каждой записи role；len т.е. кол-во сообщений
 	}{
-		{"developer 改写为 system",
+		{"developer Переписать как system",
 			`{"messages":[{"role":"developer","content":"x"}]}`, []string{"system"}},
-		{"Developer 首字母大写改写",
+		{"Developer перезапись с заглавной буквы",
 			`{"messages":[{"role":"Developer","content":"x"}]}`, []string{"system"}},
-		{"DEVELOPER 全大写改写",
+		{"DEVELOPER Переписать капсом",
 			`{"messages":[{"role":"DEVELOPER","content":"x"}]}`, []string{"system"}},
-		{"前后空白 TrimSpace 后改写",
+		{"Пробелы в начале и конце TrimSpace перезаписать после",
 			`{"messages":[{"role":" developer ","content":"x"}]}`, []string{"system"}},
-		{"system 原样保留",
+		{"system сохранить как есть",
 			`{"messages":[{"role":"system","content":"x"}]}`, []string{"system"}},
-		{"user 原样保留",
+		{"user сохранить как есть",
 			`{"messages":[{"role":"user","content":"x"}]}`, []string{"user"}},
-		{"assistant 原样保留",
+		{"assistant сохранить как есть",
 			`{"messages":[{"role":"assistant","content":"x"}]}`, []string{"assistant"}},
-		{"tool 原样保留（不因未知而改写）",
+		{"tool сохранить как есть (не переписывать из-за неизвестного)",
 			`{"messages":[{"role":"tool","content":"x"}]}`, []string{"tool"}},
-		{"messages 缺失不 panic 且其余字段不变",
+		{"messages Отсутствие не panic остальные поля без изменений",
 			`{"model":"glm-5.2"}`, []string{}},
-		{"messages 为空数组不 panic",
+		{"messages пустой массив не panic",
 			`{"messages":[]}`, []string{}},
-		{"混合消息仅 developer 被改写",
+		{"Смешанные сообщения только developer был перезаписан",
 			`{"messages":[{"role":"developer","content":"a"},{"role":"user","content":"b"},{"role":"developer","content":"c"}]}`,
 			[]string{"system", "user", "system"}},
-		{"sanitize=false 时仍归一（与脱敏解耦）",
+		{"sanitize=false при этом все равно нормализуется (развязано с десенситизацией)",
 			`{"messages":[{"role":"developer","content":"x"}]}`, []string{"system"}},
-		{"非对象消息元素跳过、其余正常处理",
+		{"необъектные элементы сообщения пропускаются, остальные — штатно",
 			`{"messages":["str",{"role":"developer","content":"x"},42]}`, []string{"system"}},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// 全程 sanitize=false：验证 role 归一与内容脱敏开关无关（D4）。
+			// на всем протяжении sanitize=false：Верификация role нормализация не зависит от переключателя десенситизации контента (D4）。
 			out := PrepareBodyOptWithEfforts([]byte(c.body), false, nil)
 			var obj map[string]any
 			if err := json.Unmarshal(out, &obj); err != nil {
 				t.Fatalf("unmarshal: %v (out=%s)", err, out)
 			}
 
-			// 提取输出 messages 里的 role（非对象元素跳过，不 panic）。
+			// извлечь вывод messages внутри role（Не-объектные элементы пропускаются, не panic）。
 			var got []string
 			if msgs, ok := obj["messages"].([]any); ok {
 				for _, m := range msgs {
@@ -69,7 +69,7 @@ func TestNormalizeRoles(t *testing.T) {
 			}
 
 			if len(got) != len(c.wantRoles) {
-				t.Fatalf("role 数量不符: got %v (%d) want %v (%d)", got, len(got), c.wantRoles, len(c.wantRoles))
+				t.Fatalf("role Несоответствие количества: got %v (%d) want %v (%d)", got, len(got), c.wantRoles, len(c.wantRoles))
 			}
 			for i := range got {
 				if got[i] != c.wantRoles[i] {
@@ -79,31 +79,31 @@ func TestNormalizeRoles(t *testing.T) {
 		})
 	}
 
-	// messages 缺失时，其余字段必须原样保留（除强制 stream）。
-	t.Run("messages 缺失时其余字段不变", func(t *testing.T) {
+	// messages при отсутствии остальные поля должны сохраняться как есть (кроме принудительных stream）。
+	t.Run("messages При отсутствии остальные поля без изменений", func(t *testing.T) {
 		out := PrepareBodyOptWithEfforts([]byte(`{"model":"glm-5.2","temperature":0.7}`), false, nil)
 		var obj map[string]any
 		if err := json.Unmarshal(out, &obj); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		if obj["model"] != "glm-5.2" || obj["temperature"] != 0.7 {
-			t.Errorf("其余字段被改动: %v", obj)
+			t.Errorf("Остальные поля изменены: %v", obj)
 		}
 	})
 }
 
 func TestPrepareBodyOptWithEfforts(t *testing.T) {
 	efforts := map[string][]string{
-		"glm-5.2":      {"off", "low", "high"},
+		"glm-5.2": {"off", "low", "high"},
 		"glm-5.2-mini": {"low", "medium"},
-		"glm-5.2-max":  {"high", "xhigh"},
+		"glm-5.2-max": {"high", "xhigh"},
 	}
 	cases := []struct {
-		name    string
-		body    string
+		name string
+		body string
 		efforts map[string][]string
-		wantKey string // 输出应带有的 effort 字段名；空表示该字段应不存在
-		wantVal string // 期望值
+		wantKey string // Вывод должен содержать effort имя поля; пусто означает, что поле должно отсутствовать
+		wantVal string // Ожидаемое значение
 	}{
 		{"downgrade to highest supported at or below request",
 			`{"model":"glm-5.2-mini","reasoning_effort":"high"}`, efforts, "reasoning_effort", "medium"},
@@ -148,8 +148,8 @@ func TestPrepareBodyOptWithEfforts(t *testing.T) {
 	}
 }
 
-// TestPrepareBodyStreamOptions body 未显式带 stream_options 时注入
-// {include_usage: true}（D7，官方 CLI 流式必发）；body 已带则不覆盖。
+// TestPrepareBodyStreamOptions body Не передано явно stream_options инжектируется при
+// {include_usage: true}（D7，Официальный CLI в потоке обязательно отправляется);body Если уже есть — не перезаписывать.
 func TestPrepareBodyStreamOptions(t *testing.T) {
 	out := PrepareBodyOptWithEfforts([]byte(`{"model":"glm-5.2","messages":[]}`), false, nil)
 	var obj map[string]any
@@ -178,25 +178,25 @@ func TestPrepareBodyStreamOptions(t *testing.T) {
 	}
 }
 
-// PrepareBodyOptWithEffertsPreserve helper：PrepareBodyOptWithEfforts 包装。
+// PrepareBodyOptWithEffertsPreserve helper：PrepareBodyOptWithEfforts Обёртка.
 func PrepareBodyOptWithEffertsPreserve(t *testing.T, body string) []byte {
 	t.Helper()
 	return PrepareBodyOptWithEfforts([]byte(body), false, nil)
 }
 
-// decodeBody helper：解析 body JSON。
+// decodeBody helper：Парсинг body JSON。
 func decodeBody(b []byte) (map[string]any, error) {
 	var obj map[string]any
 	err := json.Unmarshal(b, &obj)
 	return obj, err
 }
 
-// TestPrepareBodyDeterministic 序列化稳定性：同输入跑多遍出站字节级一致
-// （prompt_cache_key 前缀命中的前提——链中不得注入时间/随机/ID 类不确定源）。
+// TestPrepareBodyDeterministic Стабильность сериализации: один вход — побайтово идентичный выход за N прогонов
+// （prompt_cache_key Условие попадания по префиксу — в цепочку нельзя инжектировать время/Случайно/ID тип неопределённый источник).
 func TestPrepareBodyDeterministic(t *testing.T) {
 	inputs := []string{
-		`{"model":"glm-5.2","messages":[{"role":"system","content":"你是助手"},{"role":"user","content":"你好"}],"reasoning_effort":"high"}`,
-		`{"model":"deepseek-v4","messages":[{"role":"user","content":"写个函数"}],"tool_choice":{"type":"auto"},"tools":[{"type":"function","function":{"name":"f"}}]}`,
+		`{"model":"glm-5.2","messages":[{"role":"system","content":"Ты — ассистент"},{"role":"user","content":"Привет"}],"reasoning_effort":"high"}`,
+		`{"model":"deepseek-v4","messages":[{"role":"user","content":"написать функцию"}],"tool_choice":{"type":"auto"},"tools":[{"type":"function","function":{"name":"f"}}]}`,
 		`{"model":"glm-5.3","messages":[{"role":"developer","content":"sys"},{"role":"user","content":[{"type":"text","text":"hi"}]}]}`,
 	}
 	for i, in := range inputs {
@@ -214,9 +214,9 @@ func TestPrepareBodyDeterministic(t *testing.T) {
 	}
 }
 
-// TestNormalizeImageURL 覆盖 OpenAI chat 多模态内容的 image_url 兼容：
-// 字符串形态必须转为上游需要的对象形态；对象形态及其中字段必须原样保留；
-// 无效输入不补默认值，继续交给上游返回真实错误。
+// TestNormalizeImageURL перекрытие OpenAI chat мультимодального контента image_url Совместимость:
+// Строковую форму необходимо конвертировать в объектную форму апстрима; объектную форму и её поля сохранять как есть;
+// Невалидный ввод не дополнять дефолтом, пробрасывать выше для возврата реальной ошибки.
 func TestNormalizeImageURL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -290,10 +290,10 @@ func TestNormalizeImageURL(t *testing.T) {
 	}
 }
 
-// TestNormalizeToolPatterns 工具 schema pattern 的 `\_` 转义归一（11129 实案：
-// exa agent_run 的 `^agent\_run\_` 被 deepseek 系确定性拒收，归一后上游 200）。
-// 覆盖：function.parameters 与裸 parameters 两形态、嵌套 schema、patternProperties
-// 键、消息正文不碰、无 tools no-op、sanitize 开关两态一致。
+// TestNormalizeToolPatterns Инструмент schema pattern `\_` Нормализация экранирования (11129 Реальный кейс:
+// exa agent_run `^agent\_run\_` Получено deepseek детерминированный отказ, после нормализации апстрим 200）。
+// Перекрытие:function.parameters и голый parameters Две формы, вложенность schema、patternProperties
+// ключи, тело сообщения без изменений, без tools no-op、sanitize оба состояния переключателя согласованы.
 func TestNormalizeToolPatterns(t *testing.T) {
 	lookupPattern := func(t *testing.T, body string, path ...any) string {
 		t.Helper()
@@ -323,13 +323,13 @@ func TestNormalizeToolPatterns(t *testing.T) {
 	}
 
 	t.Run("exa agent_run pattern normalized", func(t *testing.T) {
-		bs := string(byte(92)) // 反斜杠，测试体经工具链多层转义易被吞，运行时拼装保真
-		body := `{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"agent_run","parameters":{"type":"object","properties":{"runId":{"type":"string","pattern":"^agent` + bs + bs + `_run` + bs + bs + `_"}` + `,"query":{"type":"string"}},"required":["query"]}}}]}` //nolint:lll // 实案 body 原样
+		bs := string(byte(92)) // Обратный слэш — тестовое тело легко теряется при многоуровневом экранировании в тулчейне, сборка в рантайме сохраняет целостность
+		body := `{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"agent_run","parameters":{"type":"object","properties":{"runId":{"type":"string","pattern":"^agent` + bs + bs + `_run` + bs + bs + `_"}` + `,"query":{"type":"string"}},"required":["query"]}}}]}` //nolint:lll // реальный кейс body Как есть
 		out := string(PrepareBodyOptWithEfforts([]byte(body), false, nil))
 		if got := lookupPattern(t, out, "tools", 0, "function", "parameters", "properties", "runId", "pattern"); got != `^agent_run_` {
 			t.Fatalf("pattern = %q, want %q", got, `^agent_run_`)
 		}
-		// 同 schema 的兄弟字段不受影响
+		// Совм. schema соседние поля не затрагиваются
 		if got := lookupPattern(t, out, "tools", 0, "function", "parameters", "properties", "query", "type"); got != "string" {
 			t.Fatalf("sibling field disturbed: %q", got)
 		}

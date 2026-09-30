@@ -1,12 +1,12 @@
-// taskcenter.go 面板「任务中心」：全账号任务扫描 + 执行队列（可配并发）+
-// 成长任务队列。
+// taskcenter.go панель "Центр задач»: сканирование задач по всем аккаунтам + очередь исполнения (настраиваемая конкурентность)+
+// Очередь задач роста.
 //
-// 语义：
-//   - 扫描（scan_all）：并发拉取每账号的成长任务列表（默认+小程序口径），
-//     汇总出"未完成且可自动化"的待办清单（只读，不执行）。
-//   - 执行队列（run_queue + queue）：把待办项按账号分组排队执行——账号内
-//     串行（复用 per-account 锁，与单任务/一键完成互斥），账号间并发
-//     （concurrency 信号量限制，默认 1）。队列状态可轮询。
+// Семантика:
+// - Сканирование (scan_all）：параллельно тянуть список growth-задач на аккаунт (по умолчанию+в метрике мини-программы),
+// Свести в"Не завершено и поддается автоматизации"список TODO (только чтение, не исполнять).
+// - Очередь выполнения (run_queue + queue）：группировать задачи по аккаунтам и выполнять очередью — внутри аккаунта
+// Последовательно (повторное использование per-account блокировка, и одиночная задача/взаимное исключение в один клик), конкурентность между аккаунтами
+// （concurrency Ограничение семафора, по умолчанию 1）。Статус очереди доступен для опроса.
 package panel
 
 import (
@@ -23,39 +23,39 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// 扫描（只读）
+// Сканирование (только чтение)
 // ---------------------------------------------------------------------------
 
-// scanAccountItem 单账号扫描结果。
+// scanAccountItem Результат сканирования одного аккаунта.
 type scanAccountItem struct {
-	UID       string          `json:"uid"`
-	Nickname  string          `json:"nickname"`
-	Growth    []upstream.Task `json:"growth,omitempty"`
-	GrowthErr string          `json:"growth_error,omitempty"`
+	UID string `json:"uid"`
+	Nickname string `json:"nickname"`
+	Growth []upstream.Task `json:"growth,omitempty"`
+	GrowthErr string `json:"growth_error,omitempty"`
 }
 
-// growthPending 任务是否"未完成且可自动化"。
+// growthPending Выполнена ли задача"Не завершено и поддается автоматизации"。
 func growthPending(t upstream.Task) bool {
 	if t.Claimed {
 		return false
 	}
-	// 上游锁定的任务不出待办：Sequential 族每日零点解锁一环，刚做完上一环时
-	// 下一环以下发但 locked 形态出现在列表里——扫进队列只会 accept 不落账报
-	// 失败（每日锁定窗口），零点解锁后自然回到待办。其余 locked（上游未开放）
-	// 同语义：不该被自动化尝试。
+	// заблокированные апстримом задачи не попадают в todo:Sequential Семейство: ежедневно в 00:00 открывается этап, сразу после выполнения предыдущего
+	// следующее звено с выдачей но locked Форма появляется в списке — попадание в очередь только accept не проводить по учету
+	// сбой (ежедневное окно блокировки), в 00:00 разблокируется и вернётся в todo. Остальное locked（апстрим не открыт)
+	// Та же семантика: не должно пробоваться автоматически.
 	if t.Locked {
 		return false
 	}
 	if t.Target > 0 && t.Current >= t.Target {
-		// 达标未领：也入队（队列执行后会自动领）——但仅限有自动化动作的任务，
-		// 否则队列执行时会因 autoActionFor 为 nil 直接报错。
+		// достигнуто, но не получено: тоже в очередь (очередь автополучит при исполнении) — только для задач с авто-действием,
+		// Иначе при исполнении очереди из-за autoActionFor для nil Сразу ошибка.
 		return autoActionFor(t.TaskCode) != nil
 	}
 	return autoActionFor(t.TaskCode) != nil
 }
 
-// tasksScanAll 扫描全部账号：成长任务（未完成+可自动化，含 mp 口径合并）。
-// 只读操作，并发拉取（账号数个位数）。
+// tasksScanAll Сканирование всех аккаунтов: задания роста (незавершённые+автоматизируемо, вкл. mp объединение метрик).
+// Только чтение, параллельный фетч (аккаунтов — единицы).
 func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 	states := p.cfg.Pool.List()
 	items := make([]scanAccountItem, len(states))
@@ -73,7 +73,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 			}
 			it := &items[i]
 			it.UID, it.Nickname = uid, a.Nickname
-			// D4 门控：global 账号无 CN 成长任务体系，不发起任何上游调用。
+			// D4 Гейт:global учётная запись отсутствует CN система заданий роста, без вызовов апстрима.
 			if a.IsGlobal() {
 				return
 			}
@@ -86,9 +86,9 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// 小程序口径任务（school_season 校园日 / Sequential_Tasks_1 小程序首对话）
-			// 仅在 mp 头列表下发，与默认口径不重叠——合并进待办列表；mp 列表失败
-			// 静默（无 mp 任务的部署/活动结束时零影响）。
+			// Задача в формате мини-программы (school_season День кампуса / Sequential_Tasks_1 первый диалог мини-приложения)
+			// Только при mp рассылка списка заголовков, без пересечения с дефолтным набором — объединить в список ожидания;mp Ошибка списка
+			// тихо (без mp Развертывание задачи/по окончании акции — нулевое влияние).
 			if mpTasks, err := p.cfg.Upstream.ListTasksMP(a); err == nil {
 				seen := map[string]bool{}
 				for _, t := range it.Growth {
@@ -107,49 +107,49 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		pending += len(it.Growth)
 	}
-	log.Printf("panel: 队列扫描完成：全部账号待办 %d 项", pending)
+	log.Printf("panel: сканирование очереди завершено: все аккаунты ожидают обработки %d Пункт", pending)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": items, "pending_count": pending})
 }
 
 // ---------------------------------------------------------------------------
-// 执行队列
+// Очередь исполнения
 // ---------------------------------------------------------------------------
 
-// queueItem 队列执行单元。
+// queueItem Единица выполнения очереди.
 type queueItem struct {
-	UID      string `json:"uid"`
+	UID string `json:"uid"`
 	Nickname string `json:"nickname"`
-	Kind     string `json:"kind"` // growth
-	Code     string `json:"code"`
-	Status   string `json:"status"` // pending | running | done | skipped | error
-	Message  string `json:"message,omitempty"`
+	Kind string `json:"kind"` // growth
+	Code string `json:"code"`
+	Status string `json:"status"` // pending | running | done | skipped | error
+	Message string `json:"message,omitempty"`
 }
 
-// queueState 队列运行状态。Seq 每次启动 +1——前端只渲染"自己启动的那一轮"，
-// 执行结束后的残留 items 不会覆盖后续的扫描结果视图。
+// queueState состояние выполнения очереди.Seq При каждом запуске +1——фронтенд рендерит только"Раунд, запущенный самостоятельно"，
+// остаток после завершения выполнения items не перезапишет последующее представление результатов сканирования.
 type queueState struct {
-	mu        sync.Mutex
-	running   bool
+	mu sync.Mutex
+	running bool
 	startedAt time.Time
-	items     []queueItem
-	conc      int
-	seq       int
+	items []queueItem
+	conc int
+	seq int
 }
 
-// Panel 队列字段在 Panel 结构体上（panel.go）由 initQueue 惰性初始化；
-// 这里集中访问器，避免改动 New 构造链。
+// Panel Поле очереди в Panel На структуре (panel.go）От initQueue ленивая инициализация;
+// здесь централизованные аксессоры, во избежание изменений New Цепочка конструирования.
 func (p *Panel) queue() *queueState {
 	p.queueOnce.Do(func() { p.q = &queueState{} })
 	return p.q
 }
 
-// tasksRunQueue 启动执行队列：{concurrency:1-4, growth:bool, school:bool}。
-// 先做一次扫描，把全部待办项排队（growth 按账号内 autoActions 顺序执行，
-// school 逐账号跑闭环），账号内串行、账号间受并发信号量约束。
+// tasksRunQueue Запустить очередь выполнения:{concurrency:1-4, growth:bool, school:bool}。
+// Сначала просканировать, поставить в очередь все задачи (growth Внутри аккаунта autoActions Последовательное выполнение,
+// school прогон замкнутого цикла поаккаунтно), внутри аккаунта последовательно, между аккаунтами — ограничение семафором конкурентности.
 func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Concurrency int  `json:"concurrency"`
-		Growth      bool `json:"growth"`
+		Concurrency int `json:"concurrency"`
+		Growth bool `json:"growth"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if !body.Growth {
@@ -172,10 +172,10 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// startGrowthQueue 扫描全部账号待办并启动队列（HTTP「执行全部待办」与调度器
-// growth 时点共用核心）。返回 (started, total, seq, msg)：seq==-1 表示队列
-// 已在执行（冲突）；started=false 时 msg 为无可执行待办的说明。并发夹取
-// [1,4]；growth 开关同 HTTP 入参语义。
+// startGrowthQueue Сканировать бэклог всех аккаунтов и запустить очередь (HTTP「«Выполнить все задачи» и планировщик
+// growth момент времени — общее ядро). Возврат (started, total, seq, msg)：seq==-1 Очередь отображения
+// уже выполняется (конфликт);started=false Время msg Описание отсутствия исполнимых задач. Конкурентный захват
+// [1,4]；growth переключатель аналогично HTTP Семантика входных параметров.
 func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, total int, seq int, msg string) {
 	if concurrency < 1 {
 		concurrency = 1
@@ -187,15 +187,15 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	q.mu.Lock()
 	if q.running {
 		q.mu.Unlock()
-		return false, 0, -1, "队列正在执行中（可在任务中心查看进度）"
+		return false, 0, -1, "Очередь выполняется (прогресс в центре задач)"
 	}
-	// 先占位：扫描（数秒级网络耗时）期间若并发再次触发，直接命中上面的 running
-	// 判拒，避免两个 goroutine 同时启动互相覆盖 q.items/q.seq。无待办时回滚。
+	// Сначала резервирование: если во время сканирования (сеть — секунды) параллельно триггернётся снова, сразу попадёт в верхний running
+	// отклонить, избежать двух goroutine Одновременный запуск с взаимной перезаписью q.items/q.seq。Откат при отсутствии pending задач.
 	q.running = true
 	q.startedAt = time.Now()
 	q.mu.Unlock()
 
-	// 扫描待办（复用扫描逻辑的拉取部分）。
+	// Сканирование очереди задач (переиспользуется часть выборки логики сканирования).
 	states := p.cfg.Pool.List()
 
 	var accts []queueAccount
@@ -213,7 +213,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 		go func(a *auth.Auth) {
 			defer wg.Done()
 			one := queueAccount{a: a}
-			// D4 门控：global 账号无 CN 成长任务体系，不发起任何上游调用。
+			// D4 Гейт:global учётная запись отсутствует CN система заданий роста, без вызовов апстрима.
 			if a.IsGlobal() {
 				return
 			}
@@ -224,9 +224,9 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 							one.grow = append(one.grow, t)
 						}
 					}
-					// 合并小程序口径待办（与 tasksScanAll 同口径：mp 列表是默认口径
-					// 超集，按 code 去重；失败静默）。此前此处漏合并——扫描显示
-					// mp 待办而队列报"无可执行待办"。
+					// Объединить TODO по метрике мини-приложения (с tasksScanAll Та же метрика:mp список — метрика по умолчанию
+					// Супермножество, по code Дедупликация; при ошибке тихо). Ранее здесь пропущено слияние — скан показывает
+					// mp в ожидании, а очередь сообщает"Нет исполняемых задач"。
 					if mpTasks, mpErr := p.cfg.Upstream.ListTasksMP(a); mpErr == nil {
 						seen := map[string]bool{}
 						for _, t := range one.grow {
@@ -238,7 +238,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 							}
 						}
 					}
-					sort.Slice(one.grow, func(i, j int) bool { // 按 autoActions 顺序（依赖前置）
+					sort.Slice(one.grow, func(i, j int) bool { // Нажать autoActions Порядок (зависит от предыдущего)
 						return autoActionIndex(one.grow[i].TaskCode) < autoActionIndex(one.grow[j].TaskCode)
 					})
 				}
@@ -252,7 +252,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	}
 	wg.Wait()
 
-	// 组装队列（账号分组，保持顺序）。
+	// сборка очереди (группировка по аккаунтам, сохранение порядка).
 	var items []queueItem
 	for _, one := range accts {
 		for _, t := range one.grow {
@@ -260,12 +260,12 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 		}
 	}
 	if len(items) == 0 {
-		log.Printf("panel: 队列启动：无可执行待办（全部账号任务已完成）")
+		log.Printf("panel: Запуск очереди: нет исполнимых задач (все задачи аккаунтов выполнены)")
 		q.mu.Lock()
 		q.running = false
 		q.startedAt = time.Time{}
 		q.mu.Unlock()
-		return false, 0, 0, "全部账号没有待办任务"
+		return false, 0, 0, "У всех аккаунтов нет ожидающих задач"
 	}
 
 	q.mu.Lock()
@@ -276,30 +276,30 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 	q.mu.Unlock()
 
 	go p.runQueueItems(accts, items, concurrency)
-	log.Printf("panel: 队列启动：%d 项（并发 %d，成长 %v）", len(items), concurrency, growth)
+	log.Printf("panel: Запуск очереди:%d элементов (параллельность %d，рост %v）", len(items), concurrency, growth)
 	return true, len(items), seq, ""
 }
 
-// RunGrowthQueueOnce 调度器 growth 时点回调（sch.SetGrowthHook 挂载）：与
-// 「执行全部待办」按钮完全同管线（成长，串行并发 1）。Sequential 族
-// 每日零点解锁一环，此前只能手动扫描推进；此回调让链条每天自动走一环。
-// 异步执行（startGrowthQueue 启动 goroutine 即返），已在跑/无待办安全跳过。
+// RunGrowthQueueOnce Планировщик growth колбэк по времени (sch.SetGrowthHook монтирование): и
+// 「кнопка "Выполнить все задачи» полностью через тот же пайплайн (рост, послед./паралл. 1）。Sequential Семейство
+// Ежедневно в 00:00 разблокируется один этап, ранее продвижение только ручным сканом; этот колбэк автоматически продвигает цепочку на один этап в день.
+// Асинхронное выполнение (startGrowthQueue Запуск goroutine мгновенный возврат), уже выполняется/Нет задач — безопасный пропуск.
 func (p *Panel) RunGrowthQueueOnce() {
 	started, total, _, _ := p.startGrowthQueue(1, true)
 	if started {
-		log.Printf("panel: 定时成长任务队列已启动（%d 项）", total)
+		log.Printf("panel: Очередь периодических задач роста запущена (%d элементов)", total)
 	}
 }
 
-// runQueueItems 队列执行主体：按账号分组，账号内串行（per-account 锁），
-// 账号间并发（信号量）。每项结果写回队列状态。
+// runQueueItems исполнитель очереди: группировка по аккаунтам, внутри аккаунта последовательно (per-account блокировка),
+// конкурентность между аккаунтами (семафор). Результат каждого элемента пишется обратно в статус очереди.
 func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurrency int) {
 	q := p.queue()
 	defer func() {
 		q.mu.Lock()
 		q.running = false
 		q.mu.Unlock()
-		log.Printf("panel: 队列执行结束（共 %d 项）", len(items))
+		log.Printf("panel: Выполнение очереди завершено (всего %d элементов)", len(items))
 	}()
 
 	sem := make(chan struct{}, concurrency)
@@ -310,19 +310,19 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			// per-account 互斥：与单任务/一键完成共用一把锁。
+			// per-account взаимоисключение: с одиночной задачей/завершение в один клик использует общий лок.
 			if !p.tryLockAccount(one.a.UID) {
 				p.queueSet(q, one.a.UID, func(it *queueItem) {
-					it.Status, it.Message = "skipped", "该账号有其它任务动作在执行，跳过"
+					it.Status, it.Message = "skipped", "у аккаунта уже выполняется другое действие задачи, пропуск"
 				})
 				return
 			}
 			defer p.unlockAccount(one.a.UID)
-			// 前置：批量接受尚未接受的任务。上游对 not_accepted 的任务不计数——
-			// 面板「一键完成」一直有这步，队列路径此前漏了（表现为上报 200 但进度
-			// 一直 not_accepted、无法领奖）。失败不阻塞（行为事件才是进度判据）。
+			// префикс: массово принять непринятые задачи. Апстрим к not_accepted задачи не учитываются —
+			// В панели "Завершить в один клик» этот шаг всегда был, в пути очереди ранее пропущен (проявляется как отчет 200 Но прогресс
+			// всегда not_accepted、невозможно получить награду). Ошибка не блокирует (критерий прогресса — поведенческое событие).
 			if accepted := p.acceptPendingTasks(one.a); accepted > 0 {
-				time.Sleep(reportGap) // 给上游状态流转留时间
+				time.Sleep(reportGap) // Оставить время на переход состояния апстрима
 			}
 			for i := range q.items {
 				uid, kind, code := q.snapshotAt(i)
@@ -341,27 +341,27 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 				} else {
 					p.queueMarkAt(i, "done", msg)
 				}
-				time.Sleep(reportGap) // 项间节流
+				time.Sleep(reportGap) // Троттлинг между элементами
 			}
 		}(one)
 	}
 	wg.Wait()
 }
 
-// queueAccount 队列执行的账号单元（runQueueItems 参数）。
+// queueAccount Юнит аккаунта исполнения очереди (runQueueItems параметр).
 type queueAccount struct {
-	a    *auth.Auth
+	a *auth.Auth
 	grow []upstream.Task
 }
 
-// snapshotAt 锁内读条目三元组（避免锁外持有指针）。
+// snapshotAt Чтение триплета записи под блокировкой (избежать удержания указателя вне блокировки).
 func (q *queueState) snapshotAt(i int) (uid, kind, code string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.items[i].UID, q.items[i].Kind, q.items[i].Code
 }
 
-// queueMarkAt 按索引更新队列条目状态（条目数组固定不再增删）。
+// queueMarkAt обновление статуса элемента очереди по индексу (массив элементов фиксирован, без добавления/удаления).
 func (p *Panel) queueMarkAt(i int, status, msg string) {
 	q := p.queue()
 	q.mu.Lock()
@@ -369,7 +369,7 @@ func (p *Panel) queueMarkAt(i int, status, msg string) {
 	q.mu.Unlock()
 }
 
-// queueSet 按 uid 批量改状态。
+// queueSet Нажать uid Массовое изменение статуса.
 func (p *Panel) queueSet(q *queueState, uid string, fn func(*queueItem)) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -380,7 +380,7 @@ func (p *Panel) queueSet(q *queueState, uid string, fn func(*queueItem)) {
 	}
 }
 
-// acceptPendingTasks 批量接受该账号未接受的任务，返回接受的个数（失败返回 0 不阻塞）。
+// acceptPendingTasks пакетно принять непринятые задачи аккаунта, вернуть кол-во принятых (при ошибке вернуть 0 не блокирует).
 func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 	tasks, err := p.cfg.Upstream.ListTasks(a)
 	if err != nil {
@@ -396,31 +396,31 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 		return 0
 	}
 	if err := p.cfg.Upstream.AcceptTasks(a, codes); err != nil {
-		log.Printf("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
+		log.Printf("panel: очередь accept uid=%s: %v（не блокирует)", a.UID, err)
 		return 0
 	}
-	log.Printf("panel: 队列 accept uid=%s: 已接受 %d 个任务", a.UID, len(codes))
+	log.Printf("panel: очередь accept uid=%s: Принято %d задач", a.UID, len(codes))
 	return len(codes)
 }
 
-// runGrowthQueued 执行单个成长任务（动作 + 回读 + 自动领奖；与
-// accountTaskAuto 同语义，结果以文字返回）。
+// runGrowthQueued выполнение одиночной задачи роста (действие + обратное чтение + Автополучение награды; и
+// accountTaskAuto та же семантика, результат возвращается текстом).
 func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 	act := autoActionFor(code)
 	if act == nil {
-		return "", fmt.Errorf("任务 %s 无自动动作", code)
+		return "", fmt.Errorf("задача %s Нет автоматических действий", code)
 	}
-	// taskByCode 已双口径（mp 专属码自动回落 mp 列表）。
+	// taskByCode Уже двойная метрика (mp Авто-фолбэк эксклюзивного кода mp список).
 	before, err := p.taskByCode(a, code)
 	if err != nil {
 		return "", err
 	}
 	if before == nil {
-		return "该账号无此任务", nil
+		return "у этого аккаунта нет такой задачи", nil
 	}
 	isMP := isMPTaskCode(code)
 	if before.Claimed {
-		return "已完成（已领取）", nil
+		return "Завершено (получено)", nil
 	}
 	msg, err := act.run(p, a)
 	if err != nil {
@@ -441,17 +441,17 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, code)
 		}
 		if cerr == nil && (credit > 0 || energy > 0) {
-			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", credit, energy)
+			msg += fmt.Sprintf("；Автополучение награды +%d Разделить +%d Возможность", credit, energy)
 		}
 	}
 	if after != nil {
-		msg += "（进度 " + taskProgressText(after) + "）"
+		msg += "(Прогресс " + taskProgressText(after) + ")"
 	}
-	log.Printf("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
+	log.Printf("panel: очередь growth uid=%s code=%s: %s", a.UID, code, msg)
 	return msg, nil
 }
 
-// tasksQueueStatus 队列状态（轮询用）。
+// tasksQueueStatus состояние очереди (для polling).
 func (p *Panel) tasksQueueStatus(w http.ResponseWriter, r *http.Request) {
 	q := p.queue()
 	q.mu.Lock()
@@ -459,32 +459,32 @@ func (p *Panel) tasksQueueStatus(w http.ResponseWriter, r *http.Request) {
 	items := make([]queueItem, len(q.items))
 	copy(items, q.items)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"running":    q.running,
-		"total":      len(items),
-		"conc":       q.conc,
-		"started":    !q.startedAt.IsZero(),
+		"running": q.running,
+		"total": len(items),
+		"conc": q.conc,
+		"started": !q.startedAt.IsZero(),
 		"started_at": q.startedAt,
-		"seq":        q.seq,
-		"items":      items,
+		"seq": q.seq,
+		"items": items,
 	})
 }
 
-// schoolVouchers 我的券码：逐 CN 账号查开学季 /vouchers（3 并发，与 packages
-// 同款限流），失败只在对应账号标 error。global 账号无开学季，不发上游调用。
+// schoolVouchers Мои коды купонов: поштучно CN Проверка аккаунтом сезона "Снова в школу» /vouchers（3 Конкурентность, и packages
+// аналогичный лимит), сбой помечается только на соответствующем аккаунте error。global у аккаунта нет сезона Back-to-School, вызов апстрима не отправлять.
 func (p *Panel) schoolVouchers(w http.ResponseWriter, r *http.Request) {
 	accts := p.cfg.Pool.List()
 	type row struct {
-		UID      string                   `json:"uid"`
-		Nickname string                   `json:"nickname"`
+		UID string `json:"uid"`
+		Nickname string `json:"nickname"`
 		Vouchers []upstream.SchoolVoucher `json:"vouchers"`
-		Err      string                   `json:"error,omitempty"`
+		Err string `json:"error,omitempty"`
 	}
 	out := make([]row, len(accts))
 	sem := make(chan struct{}, 3)
 	var wg sync.WaitGroup
 	for i, st := range accts {
 		if st.Disabled {
-			continue // 未占位，行末统一压掉
+			continue // не занято, в конце строки убрать
 		}
 		a := p.cfg.Pool.AuthByUID(st.UID)
 		if a == nil {
@@ -498,7 +498,7 @@ func (p *Panel) schoolVouchers(w http.ResponseWriter, r *http.Request) {
 			it := row{UID: a.UID, Nickname: a.Nickname}
 			switch {
 			case a.IsGlobal():
-				it.Err = "global realm（无开学季活动）"
+				it.Err = "global realm（нет акции к началу учебного года)"
 			default:
 				vs, err := p.cfg.Upstream.SchoolVouchers(a)
 				if err != nil {

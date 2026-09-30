@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// 成功/失败尝试计数、total 的 pt+ct 兜底口径、按域/账号聚合。
+// Успех/Счётчик неудачных попыток,total pt+ct резервный критерий, по домену/Агрегация аккаунтов.
 func TestAddAndTotals(t *testing.T) {
 	r := New("")
 	now := time.Now()
 	r.Add(now, "cn", "uid1", "glm-5.2", Delta{PromptTokens: 100, HasPromptTokens: true, CompletionTokens: 50, HasCompletion: true, Credit: 1.5, HasCredit: true, ModelRate: "0.05", LatencyMs: 200, HasLatency: true}, true)
-	// 失败尝试：无 usage → 只计请求数与失败数，token 不加。
+	// неудачных попыток: нет usage → Учитывать только кол-во запросов и ошибок,token Не добавлять.
 	r.Add(now, "global", "uid1", "claude-4.6", Delta{}, false)
-	// 上游没给 total 时用 pt+ct 兜底，保证总量口径连续。
+	// Апстрим не передал total использовать при pt+ct fallback, гарантирующий непрерывность общей метрики.
 	r.Add(now, "cn", "uid1", "glm-5.2", Delta{PromptTokens: 10, HasPromptTokens: true, CompletionTokens: 5, HasCompletion: true}, true)
 
 	s := r.Snapshot(24, nil)
@@ -26,7 +26,7 @@ func TestAddAndTotals(t *testing.T) {
 		t.Fatalf("pt/ct = %d/%d, want 110/55", s.Totals.PromptTokens, s.Totals.CompletionTok)
 	}
 	if s.Totals.TotalTokens != 165 {
-		t.Fatalf("tt = %d, want 165（无 total 时按 pt+ct 兜底）", s.Totals.TotalTokens)
+		t.Fatalf("tt = %d, want 165（отсутствует total При ... по pt+ct фолбэк)", s.Totals.TotalTokens)
 	}
 	if s.Totals.Credits != 1.5 || s.Totals.CreditSamples != 1 || s.Totals.CreditTokens != 150 || s.Totals.CreditsPer1MTokens != 10000 {
 		t.Fatalf("credit totals = %+v, want credits=1.5 samples=1 tokens=150 ratio=10000", s.Totals)
@@ -35,10 +35,10 @@ func TestAddAndTotals(t *testing.T) {
 		t.Fatalf("avg latency = %v, want 200", s.Totals.AvgLatencyMs)
 	}
 	if len(s.ByRealm) != 2 {
-		t.Fatalf("by_realm = %d 项, want 2", len(s.ByRealm))
+		t.Fatalf("by_realm = %d Пункт, want 2", len(s.ByRealm))
 	}
 	if s.ByAccount[0].Realm == "" {
-		t.Fatal("by_account 行缺 realm 标注")
+		t.Fatal("by_account отсутствует строка realm Метка")
 	}
 	if len(s.CreditByAccount) != 1 || s.CreditByAccount[0].Key != "uid1" ||
 		s.CreditByAccount[0].CreditSamples != 1 || s.CreditByAccount[0].CreditsPer1MTokens != 10000 {
@@ -50,11 +50,11 @@ func TestAddAndTotals(t *testing.T) {
 	}
 }
 
-// Rollup 把超出 hourlyKeep 的小时桶折叠为日桶，且幂等：重复折叠不重复计数。
-// 窗口口径：24h 窗口不含 100 天前的日桶；hours=0（全部历史）才含日点。
+// Rollup вынести превышающее hourlyKeep часовые бакеты сворачиваются в суточные, идемпотентно: повторное сворачивание не дублирует подсчет.
+// метрика окна:24h Окно не включает 100 дневной бакет N дней назад;hours=0（вся история) только тогда содержит дневные точки.
 func TestRollupIdempotent(t *testing.T) {
 	r := New("")
-	old := time.Now().AddDate(0, 0, -100) // 100 天前，超出 90 天小时保留
+	old := time.Now().AddDate(0, 0, -100) // 100 дней назад, превышение 90 дни/часы сохранить
 	r.Add(old, "cn", "u", "m", Delta{PromptTokens: 7, HasPromptTokens: true}, true)
 	r.Add(old, "cn", "u", "m", Delta{PromptTokens: 7, HasPromptTokens: true}, true)
 	r.Add(time.Now(), "cn", "u", "m", Delta{PromptTokens: 1, HasPromptTokens: true}, true)
@@ -62,28 +62,28 @@ func TestRollupIdempotent(t *testing.T) {
 	r.Rollup(time.Now())
 	after := r.Snapshot(24, nil)
 	if after.Totals.Requests != 1 || after.Totals.PromptTokens != 1 {
-		t.Fatalf("24h 窗口 totals = %d/%d, want 1/1（窗口外日桶不进聚合）", after.Totals.Requests, after.Totals.PromptTokens)
+		t.Fatalf("24h Окно totals = %d/%d, want 1/1（дневной бакет вне окна не входит в агрегацию)", after.Totals.Requests, after.Totals.PromptTokens)
 	}
 	if len(after.Series) != 1 || after.Series[0].Scope != "hour" {
-		t.Fatalf("series = %+v, want 仅当前小时 1 个点", after.Series)
+		t.Fatalf("series = %+v, want Только текущий час 1 точек", after.Series)
 	}
 
 	all := r.Snapshot(0, nil)
 	if all.Totals.Requests != 3 || all.Totals.PromptTokens != 15 {
-		t.Fatalf("全部历史 totals = %d/%d, want 3/15", all.Totals.Requests, all.Totals.PromptTokens)
+		t.Fatalf("Вся история totals = %d/%d, want 3/15", all.Totals.Requests, all.Totals.PromptTokens)
 	}
 	if len(all.Series) != 2 || all.Series[0].Scope != "day" || all.Series[1].Scope != "hour" {
-		t.Fatalf("series = %+v, want 日点在前 + 小时点在后", all.Series)
+		t.Fatalf("series = %+v, want дневная отметка впереди + часовая отметка позже", all.Series)
 	}
 
 	r.Rollup(time.Now())
 	again := r.Snapshot(0, nil)
 	if again.Totals.Requests != 3 || again.Totals.PromptTokens != 15 {
-		t.Fatalf("二次折叠后 totals = %d/%d, want 3/15（幂等被破坏）", again.Totals.Requests, again.Totals.PromptTokens)
+		t.Fatalf("После вторичного сворачивания totals = %d/%d, want 3/15（идемпотентность нарушена)", again.Totals.Requests, again.Totals.PromptTokens)
 	}
 }
 
-// 落盘→新实例恢复，数据不丢；落盘结构带版本号。
+// сброс на диск→Восстановление нового инстанса без потери данных; структура на диске версионирована.
 func TestFlushLoadRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.json")
 	r1 := New(path)
@@ -93,16 +93,16 @@ func TestFlushLoadRoundtrip(t *testing.T) {
 	r2 := New(path)
 	s := r2.Snapshot(24, nil)
 	if s.Totals.Requests != 1 || s.Totals.TotalTokens != 42 {
-		t.Fatalf("恢复后 totals = %d/%d, want 1/42", s.Totals.Requests, s.Totals.TotalTokens)
+		t.Fatalf("После восстановления totals = %d/%d, want 1/42", s.Totals.Requests, s.Totals.TotalTokens)
 	}
 	raw, _ := os.ReadFile(path)
 	var f file
 	if err := json.Unmarshal(raw, &f); err != nil || f.Version != fileVersion || len(f.Buckets) != 1 {
-		t.Fatalf("落盘文件异常: err=%v buckets=%d", err, len(f.Buckets))
+		t.Fatalf("Ошибка файла на диске: err=%v buckets=%d", err, len(f.Buckets))
 	}
 }
 
-// 版本 1 文件没有积分字段：按零值恢复，旧 Token 数据保持可见且不产生伪比例。
+// Версия 1 В файле нет поля баллов: восстановить как ноль, старый Token Данные остаются видимыми без искажения пропорций.
 func TestLoadLegacyWithoutCredit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.json")
 	legacy := `{"version":1,"saved":"2026-09-28T00:00:00+08:00","buckets":[{"s":"h:2026-09-28T10","r":"cn","u":"u1","m":"glm-5.2","q":1,"p":42,"t":42}]}`
@@ -119,7 +119,7 @@ func TestLoadLegacyWithoutCredit(t *testing.T) {
 	}
 }
 
-// 小时桶折叠为日桶时必须保留积分、样本数和匹配 Token，比例不能因 Rollup 漂移。
+// При свертке часовых бакетов в дневные сохранять баллы, кол-во выборок и совпадения Token，пропорция не должна из-за Rollup дрейф.
 func TestCreditSurvivesRollup(t *testing.T) {
 	r := New("")
 	old := time.Now().AddDate(0, 0, -100)
@@ -135,7 +135,7 @@ func TestCreditSurvivesRollup(t *testing.T) {
 	}
 }
 
-// 模型维度按“裸模型名 + 生效倍率”合并；同倍率跨账号/时间合并，不同倍率拆行。
+// по измерению модели“чистое имя модели + действующий коэффициент”Объединение; одинаковый множитель кросс-аккаунтно/Время объединяется, разные коэффициенты — в разные строки.
 func TestCreditDimensionsRateGrouping(t *testing.T) {
 	r := New("")
 	now := time.Now()
@@ -156,7 +156,7 @@ func TestCreditDimensionsRateGrouping(t *testing.T) {
 	}
 }
 
-// 旧桶缺倍率时由当前目录倍率回填，并与新桶同倍率记录合并；目录缺失时保留未知行。
+// При отсутствии множителя у старого бакета заполнить из текущего каталога и объединить с записями нового бакета с тем же множителем; при отсутствии каталога сохранить строки unknown.
 func TestCreditLegacyRateFallback(t *testing.T) {
 	r := New("")
 	now := time.Now()
@@ -175,36 +175,36 @@ func TestCreditLegacyRateFallback(t *testing.T) {
 	}
 }
 
-// Snapshot 全口径窗口过滤：窗口外的数据不进**任何**聚合（卡片/表格/时序），
-// 切窗口数字随之变化；hours=0 全部历史。Buckets 为窗口内命中的桶数。
+// Snapshot Фильтрация по полному окну: данные вне окна не попадают**любой**Агрегация (карточка/Таблица/тайминг),
+// при переключении окна цифры меняются;hours=0 вся история.Buckets — количество бакетов, попавших в окно.
 func TestSnapshotWindowFilter(t *testing.T) {
 	r := New("")
 	now := time.Now()
-	r.Add(now.Add(-48*time.Hour), "cn", "u", "m", Delta{PromptTokens: 5, HasPromptTokens: true}, true) // 窗口(24h)外
-	r.Add(now, "cn", "u", "m", Delta{PromptTokens: 3, HasPromptTokens: true}, true)                    // 窗口内
+	r.Add(now.Add(-48*time.Hour), "cn", "u", "m", Delta{PromptTokens: 5, HasPromptTokens: true}, true) // Окно(24h)Внешний
+	r.Add(now, "cn", "u", "m", Delta{PromptTokens: 3, HasPromptTokens: true}, true) // Внутри окна
 	s := r.Snapshot(24, nil)
 	if s.Totals.Requests != 1 || s.Totals.PromptTokens != 3 {
-		t.Fatalf("24h 窗口 totals = %d/%d, want 1/3（48h 前的数据应被过滤）", s.Totals.Requests, s.Totals.PromptTokens)
+		t.Fatalf("24h Окно totals = %d/%d, want 1/3（48h Данные до должны быть отфильтрованы)", s.Totals.Requests, s.Totals.PromptTokens)
 	}
 	if len(s.Series) != 1 || s.Series[0].Scope != "hour" || s.Series[0].PromptTokens != 3 {
-		t.Fatalf("series = %+v, want 仅窗口内 1 个小时点", s.Series)
+		t.Fatalf("series = %+v, want Только внутри окна 1 часовых точек", s.Series)
 	}
 	if s.Buckets != 1 {
-		t.Fatalf("buckets = %d, want 1（窗口内命中桶数）", s.Buckets)
+		t.Fatalf("buckets = %d, want 1（кол-во попаданий в бакеты внутри окна)", s.Buckets)
 	}
 
 	all := r.Snapshot(0, nil)
 	if all.Totals.Requests != 2 || all.Totals.PromptTokens != 8 {
-		t.Fatalf("全部历史 totals = %d/%d, want 2/8", all.Totals.Requests, all.Totals.PromptTokens)
+		t.Fatalf("Вся история totals = %d/%d, want 2/8", all.Totals.Requests, all.Totals.PromptTokens)
 	}
-	// since 是全库数据起点，不受窗口影响。
+	// since Начало данных всей БД, не зависит от окна.
 	if all.Since == "" || s.Since != all.Since {
-		t.Fatalf("since 应为全库起点且不随窗口变化: all=%q windowed=%q", all.Since, s.Since)
+		t.Fatalf("since должно быть началом всей БД и не меняться с окном: all=%q windowed=%q", all.Since, s.Since)
 	}
 }
 
-// 显式区间（「今天」/「自定义」）与滚动窗口走同一套全口径过滤；区间是闭区间
-// （桶起点落在 [From, To] 内即命中），且 From/To 会回显给面板确认口径。
+// Явный интервал ("сегодня»/「кастом») и скользящее окно используют единый полноохватный фильтр; интервал — закрытый
+// （Начало бакета попадает на [From, To] внутри — сразу хит), и From/To Будет отражено на панели для сверки метрики.
 func TestSnapshotExplicitWindow(t *testing.T) {
 	r := New("")
 	base := time.Now().Truncate(time.Hour).Add(-5 * time.Hour)
@@ -212,86 +212,86 @@ func TestSnapshotExplicitWindow(t *testing.T) {
 		r.Add(base.Add(time.Duration(i)*time.Hour), "cn", "u", "m",
 			Delta{PromptTokens: 10, HasPromptTokens: true}, true)
 	}
-	// 只取中间两小时（base+2h、base+3h）。
+	// брать только средние два часа (base+2h、base+3h）。
 	s := r.SnapshotWindow(Window{
 		From: base.Add(2 * time.Hour),
-		To:   base.Add(3 * time.Hour),
+		To: base.Add(3 * time.Hour),
 	}, nil, nil)
 	if s.Totals.Requests != 2 || s.Totals.PromptTokens != 20 {
-		t.Fatalf("显式区间 totals = %d/%d, want 2/20", s.Totals.Requests, s.Totals.PromptTokens)
+		t.Fatalf("Явный интервал totals = %d/%d, want 2/20", s.Totals.Requests, s.Totals.PromptTokens)
 	}
 	if len(s.Series) != 2 || s.Buckets != 2 {
-		t.Fatalf("显式区间 series/buckets = %d/%d, want 2/2", len(s.Series), s.Buckets)
+		t.Fatalf("Явный интервал series/buckets = %d/%d, want 2/2", len(s.Series), s.Buckets)
 	}
 	if s.WindowFrom == "" || s.WindowTo == "" {
-		t.Fatalf("显式区间应回显 window_from/window_to: %+v", s)
+		t.Fatalf("явный интервал должен отображаться обратно window_from/window_to: %+v", s)
 	}
 	if _, err := time.Parse(time.RFC3339, s.WindowFrom); err != nil {
-		t.Fatalf("window_from 不是 RFC3339: %q", s.WindowFrom)
+		t.Fatalf("window_from не RFC3339: %q", s.WindowFrom)
 	}
 
-	// 只有 From（「今天」的形态）：从该点起到最新，全量命中。
+	// только From（「форма "сегодня»): от этой точки до актуального — полное совпадение.
 	only := r.SnapshotWindow(Window{From: base.Add(4 * time.Hour)}, nil, nil)
 	if only.Totals.Requests != 2 {
-		t.Fatalf("仅 From 的 totals = %d, want 2", only.Totals.Requests)
+		t.Fatalf("Только From totals = %d, want 2", only.Totals.Requests)
 	}
 	if only.WindowFrom == "" || only.WindowTo != "" {
-		t.Fatalf("仅 From 时 window_to 应为空: %+v", only)
+		t.Fatalf("Только From Время window_to Должно быть пусто: %+v", only)
 	}
 
-	// 空窗口（From/To 全零且 Hours<=0）= 全部历史，与 Snapshot(0) 等价。
+	// пустое окно (From/To Все нули и Hours<=0）= вся история, и Snapshot(0) эквивалентно.
 	all := r.SnapshotWindow(Window{}, nil, nil)
 	if all.Totals.Requests != 6 {
-		t.Fatalf("全零窗口 totals = %d, want 6（全部历史）", all.Totals.Requests)
+		t.Fatalf("окно полностью нулевое totals = %d, want 6（вся история)", all.Totals.Requests)
 	}
 	if all.WindowFrom != "" || all.WindowTo != "" {
-		t.Fatalf("全部历史不应回显区间: %+v", all)
+		t.Fatalf("Вся история не должна отображать интервал: %+v", all)
 	}
 }
 
-// 滚动窗口的上限仍是 60 天，且与显式区间互不干扰（From/To 优先）。
+// Верхний предел скользящего окна всё ещё 60 дней, и не конфликтует с явным интервалом (From/To приоритет).
 func TestWindowBounds(t *testing.T) {
-	// From/To 优先于 Hours。
+	// From/To имеет приоритет над Hours。
 	from := time.Now().Add(-2 * time.Hour)
 	gotFrom, gotTo := Window{Hours: 720, From: from}.bounds()
 	if !gotFrom.Equal(from) || !gotTo.IsZero() {
-		t.Fatalf("From 应优先于 Hours: from=%v to=%v", gotFrom, gotTo)
+		t.Fatalf("From должен иметь приоритет над Hours: from=%v to=%v", gotFrom, gotTo)
 	}
-	// 只有 Hours：起点 = 当前整点往回 Hours-1 小时。
+	// только Hours：начальная точка = От текущего целого часа назад Hours-1 час.
 	f, to := Window{Hours: 24}.bounds()
 	want := time.Now().Truncate(time.Hour).Add(-23 * time.Hour)
 	if !f.Equal(want) || !to.IsZero() {
-		t.Fatalf("24h bounds = %v/%v, want %v/零值", f, to, want)
+		t.Fatalf("24h bounds = %v/%v, want %v/нулевое значение", f, to, want)
 	}
-	// Hours<=0 且无 From/To = 全部历史。
+	// Hours<=0 и без From/To = вся история.
 	if f, to := (Window{}).bounds(); !f.IsZero() || !to.IsZero() {
-		t.Fatalf("空窗口 bounds = %v/%v, want 零值/零值", f, to)
+		t.Fatalf("Пустое окно bounds = %v/%v, want нулевое значение/нулевое значение", f, to)
 	}
-	// 上限 60 天。
+	// Верхний лимит 60 дн.
 	f60, _ := Window{Hours: 100000}.bounds()
 	want60 := time.Now().Truncate(time.Hour).Add(-(24*60 - 1) * time.Hour)
 	if !f60.Equal(want60) {
-		t.Fatalf("超限 Hours 未被夹到 60 天: %v want %v", f60, want60)
+		t.Fatalf("Превышение лимита Hours не зажато 60 день: %v want %v", f60, want60)
 	}
 }
 
-// 脏 scope（解析失败）不进任何口径，也不会让整次快照失败。
+// Грязный scope（ошибка парсинга) ни в одну метрику не попадает и не валит весь снапшот.
 func TestBucketTimeRejectsGarbage(t *testing.T) {
 	if _, ok := bucketTime("h:not-a-time"); ok {
-		t.Fatal("脏小时 scope 应判定失败")
+		t.Fatal("Грязный час scope следует считать сбоем")
 	}
 	if _, ok := bucketTime("d:2026-13-45"); ok {
-		t.Fatal("脏日 scope 应判定失败")
+		t.Fatal("Грязный день scope следует считать сбоем")
 	}
 	if ts, ok := bucketTime("h:2026-09-30T13"); !ok || ts.Hour() != 13 {
-		t.Fatalf("合法小时 scope 解析失败: %v %v", ts, ok)
+		t.Fatalf("Валидные часы scope Ошибка парсинга: %v %v", ts, ok)
 	}
 	if ts, ok := bucketTime("d:2026-09-30"); !ok || ts.Day() != 30 {
-		t.Fatalf("合法日 scope 解析失败: %v %v", ts, ok)
+		t.Fatalf("Валидный день scope Ошибка парсинга: %v %v", ts, ok)
 	}
 }
 
-// Stop 触发最终落盘（Start 后未到防抖间隔也要落）。
+// Stop триггер финального сброса на диск (Start после, даже если интервал дебаунса не истек, тоже фиксировать).
 func TestLifecycleFlush(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.json")
 	r := New(path)
@@ -299,6 +299,6 @@ func TestLifecycleFlush(t *testing.T) {
 	r.Add(time.Now(), "cn", "u", "m", Delta{PromptTokens: 9, HasPromptTokens: true}, true)
 	r.Stop()
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("Stop 后应有落盘文件: %v", err)
+		t.Fatalf("Stop после должен быть файл на диске: %v", err)
 	}
 }

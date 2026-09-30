@@ -9,9 +9,9 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// 本文件为 P 组性能审查的量化基准（go test -bench 可复现），结论见 REVIEW-conflicts-perf.md。
+// Данный файл — P количественный базис для группового perf-ревью (go test -bench воспроизводимо), вывод см. REVIEW-conflicts-perf.md。
 
-// benchPool 构建 46 账号的池（对齐生产规模），全部 healthy 且 credits 各不相同。
+// benchPool Сборка 46 пул аккаунтов (выровнен с продом), все healthy И credits Все различны.
 func benchPool(b *testing.B) *Pool {
 	p := New("")
 	for i := 0; i < 46; i++ {
@@ -21,7 +21,7 @@ func benchPool(b *testing.B) *Pool {
 	return p
 }
 
-// BenchmarkPick46Accounts P1：46 账号全扫描 + 全排序 + 三因子权重抽签的每次耗时。
+// BenchmarkPick46Accounts P1：46 Полное сканирование аккаунтов + Полная сортировка + время каждой жеребьёвки по трёхфакторным весам.
 func BenchmarkPick46Accounts(b *testing.B) {
 	p := benchPool(b)
 	b.ResetTimer()
@@ -30,7 +30,7 @@ func BenchmarkPick46Accounts(b *testing.B) {
 	}
 }
 
-// BenchmarkStateSerialize46Accounts P2：46 账号 state.json 序列化（stateOverviewLocked + MarshalIndent）。
+// BenchmarkStateSerialize46Accounts P2：46 Аккаунт state.json Сериализация (stateOverviewLocked + MarshalIndent）。
 func BenchmarkStateSerialize46Accounts(b *testing.B) {
 	p := benchPool(b)
 	p.mu.Lock()
@@ -38,13 +38,13 @@ func BenchmarkStateSerialize46Accounts(b *testing.B) {
 	p.mu.Unlock()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := json.MarshalIndent(sf, "", "  "); err != nil {
+		if _, err := json.MarshalIndent(sf, "", " "); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
-// BenchmarkStateSerializeCompact46 P2 对照：json.Marshal（非缩进）耗时，量化写放大的下界。
+// BenchmarkStateSerializeCompact46 P2 сравнение:json.Marshal（без отступа) затраты времени, количественная нижняя граница write amplification.
 func BenchmarkStateSerializeCompact46(b *testing.B) {
 	p := benchPool(b)
 	p.mu.Lock()
@@ -58,7 +58,7 @@ func BenchmarkStateSerializeCompact46(b *testing.B) {
 	}
 }
 
-// BenchmarkSnapshotMarshal46 P2/P4 相关：saveLocked 落盘时额外镜像一次 snapshot（含 savedAt）的序列化成本。
+// BenchmarkSnapshotMarshal46 P2/P4 Связанное:saveLocked При сохранении на диск дополнительно зеркалировать один раз snapshot（Содержит savedAt）стоимость сериализации.
 func BenchmarkSnapshotMarshal46(b *testing.B) {
 	p := benchPool(b)
 	p.mu.Lock()
@@ -73,10 +73,10 @@ func BenchmarkSnapshotMarshal46(b *testing.B) {
 	}
 }
 
-// BenchmarkGoroutineSpawn P4 量化：单次 fire-and-forget goroutine 起搏的 CPU 成本下界
-// （对应对 Session.SetBind / pool SaveState 每次镜像派生 goroutine 的开销，不含网络，
+// BenchmarkGoroutineSpawn P4 Квантование: за один раз fire-and-forget goroutine пейсинговый CPU Нижняя граница стоимости
+// （Соответствует Session.SetBind / pool SaveState Каждое порождение образа goroutine накладные расходы, без учета сети,
 //
-//	网络走 5s 超时 fire-and-forget）。
+//	Сеть через 5s Тайм-аут fire-and-forget）。
 func BenchmarkGoroutineSpawn(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

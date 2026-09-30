@@ -16,22 +16,22 @@ func req(authz string) *http.Request {
 
 func TestVerifyBearer(t *testing.T) {
 	cases := []struct {
-		name  string
-		key   string
+		name string
+		key string
 		authz string
-		want  bool
+		want bool
 	}{
-		{"空 key 放行（未启用鉴权）", "", "", true},
-		{"空 key 也放行任意头", "", "Bearer whatever", true},
-		{"正确 key", "sk-abc123", "Bearer sk-abc123", true},
-		{"错误 key", "sk-abc123", "Bearer sk-wrong", false},
-		{"缺 Authorization 头", "sk-abc123", "", false},
-		{"缺 Bearer 前缀", "sk-abc123", "sk-abc123", false},
-		{"前缀大小写不符（规范要求精确）", "sk-abc123", "bearer sk-abc123", false},
-		{"多余空格", "sk-abc123", "Bearer  sk-abc123", false},
-		{"前缀相同但内容短", "sk-abc123", "Bearer sk-abc12", false},
-		{"前缀相同但内容长", "sk-abc123", "Bearer sk-abc1234", false},
-		{"key 恰好是前缀", "sk-abc", "Bearer sk-abcdef", false},
+		{"пустой key пропуск (аутентификация не включена)", "", "", true},
+		{"пустой key также пропускает любой заголовок", "", "Bearer whatever", true},
+		{"Корректно key", "sk-abc123", "Bearer sk-abc123", true},
+		{"Ошибка key", "sk-abc123", "Bearer sk-wrong", false},
+		{"нехватка Authorization Заголовок", "sk-abc123", "", false},
+		{"нехватка Bearer Префикс", "sk-abc123", "sk-abc123", false},
+		{"Несовпадение регистра префикса (спецификация требует точного соответствия)", "sk-abc123", "bearer sk-abc123", false},
+		{"Лишние пробелы", "sk-abc123", "Bearer  sk-abc123", false},
+		{"префикс тот же, но контент короче", "sk-abc123", "Bearer sk-abc12", false},
+		{"Префикс одинаковый, но контент длиннее", "sk-abc123", "Bearer sk-abc1234", false},
+		{"key Является префиксом", "sk-abc", "Bearer sk-abcdef", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -42,8 +42,8 @@ func TestVerifyBearer(t *testing.T) {
 	}
 }
 
-// TestVerifyBearerWithoutHeaderStillCompares 缺头路径不应因"提前返回"而暴露形状差异：
-// 这里只验证它确实返回 false 且不 panic（常量时间的性质无法用单测断言，靠实现保证）。
+// TestVerifyBearerWithoutHeaderStillCompares путь без заголовка не должен из-за"Ранний возврат"а выявляется разница форм:
+// Здесь проверяется только факт возврата false и не panic（свойство константного времени нельзя проверить юнит-тестом, гарантируется реализацией).
 func TestVerifyBearerWithoutHeaderStillCompares(t *testing.T) {
 	if VerifyBearer(req(""), "any-key") {
 		t.Error("missing header must not pass")
@@ -51,7 +51,7 @@ func TestVerifyBearerWithoutHeaderStillCompares(t *testing.T) {
 }
 
 func TestDigestIsFixedLength(t *testing.T) {
-	// 不同长度输入摘要后应等长（这是常量时间比较的前提）
+	// Хеши входов разной длины должны быть равной длины (предусловие сравнения за константное время)
 	if len(digest("")) != len(digest("a-much-longer-secret-value")) {
 		t.Error("digest length must not depend on input length")
 	}

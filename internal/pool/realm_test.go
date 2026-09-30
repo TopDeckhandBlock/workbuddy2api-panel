@@ -8,29 +8,29 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// realmPool 构造一个含 cn/global 账号的池，并确保 globalEnabled 开关开启（缺省）。
+// realmPool Создать содержащий cn/global пул аккаунтов и обеспечить globalEnabled переключатель включен (по умолчанию).
 func realmPool(t *testing.T) *Pool {
 	t.Helper()
 	withNoPickGap(t)
 	auth.SetGlobalEnabled(true)
 	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
 	p := New("")
-	// CN 账号（显式 cn realm 或空 realm+cn domain 均可）→ Realm()=="cn"
+	// CN аккаунт (явно cn realm или пусто realm+cn domain оба допустимы)→ Realm()=="cn"
 	p.Add(&auth.Auth{UID: "cn1", Domain: "www.codebuddy.cn"})
-	p.Add(&auth.Auth{UID: "cn2", Domain: ""}) // 空 domain → cn
-	// global 账号 → Realm()=="global"
+	p.Add(&auth.Auth{UID: "cn2", Domain: ""}) // пустой domain → cn
+	// global Аккаунт → Realm()=="global"
 	p.Add(&auth.Auth{UID: "g1", Domain: "www.workbuddy.ai"})
 	p.Add(&auth.Auth{UID: "g2", Domain: "workbuddy.ai"})
 	return p
 }
 
-// realmOf 直接读账号 realm（等价 e.a.Realm()）。
+// realmOf прямое чтение аккаунта realm（Эквивалентно e.a.Realm()）。
 func realmOf(a *auth.Auth) string { return a.Realm() }
 
 func TestAvailableUIDsForRealm(t *testing.T) {
 	p := realmPool(t)
 
-	// 全部 healthy → cn 集合只有 cn1/cn2，global 集合只有 g1/g2。
+	// все healthy → cn коллекция содержит только cn1/cn2，global коллекция содержит только g1/g2。
 	got := p.AvailableUIDsForRealm("cn")
 	want := []string{"cn1", "cn2"}
 	if !reflect.DeepEqual(got, want) {
@@ -42,7 +42,7 @@ func TestAvailableUIDsForRealm(t *testing.T) {
 		t.Errorf("AvailableUIDsForRealm(global)=%v want %v", got, want)
 	}
 
-	// realm=="" 退化为现状（等价 AvailableUIDs：全部 healthy）。
+	// realm=="" Деградация к текущему состоянию (эквивалент AvailableUIDs：все healthy）。
 	got = p.AvailableUIDsForRealm("")
 	want = []string{"cn1", "cn2", "g1", "g2"}
 	if !reflect.DeepEqual(got, want) {
@@ -52,8 +52,8 @@ func TestAvailableUIDsForRealm(t *testing.T) {
 
 func TestAvailableUIDsForModelRealm(t *testing.T) {
 	p := realmPool(t)
-	// 6004 模型冷却只落在 cn-1 上 → AvailableUIDsForModelRealm("glm-5.2","cn") 排除它，
-	// 但 cn 集合至少还保底 cn-2；global 集合不受 cn 冷却影响。
+	// 6004 Кулдаун модели только на cn-1 Вверх → AvailableUIDsForModelRealm("glm-5.2«,«cn") исключить его,
+	// Но cn коллекция как минимум гарантирует cn-2；global Набор не зависит от cn Влияние кулдауна.
 	p.CooldownSoftForModel("cn1", 10*time.Minute, time.Now().Add(30*time.Minute), "glm-5.2", "model 6004")
 
 	got := p.AvailableUIDsForModelRealm("glm-5.2", "cn")
@@ -65,7 +65,7 @@ func TestAvailableUIDsForModelRealm(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("AvailableUIDsForModelRealm(glm-5.2,global)=%v want %v", got, want)
 	}
-	// realm=="" → 等价 AvailableUIDsForModel（模型豁免照常：cn1 仍被该模型冷却排除）。
+	// realm=="" → Эквивалентно AvailableUIDsForModel（Исключения для моделей как обычно:cn1 всё равно исключается кулдауном этой модели).
 	got = p.AvailableUIDsForModelRealm("glm-5.2", "")
 	want = []string{"cn2", "g1", "g2"}
 	if !reflect.DeepEqual(got, want) {
@@ -84,7 +84,7 @@ func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
 		t.Fatalf("weighted cn candidates=%v want %v", got, want)
 	}
 
-	// 在途满载账号不进入候选，快过期权重不得突破现有并发上限。
+	// Аккаунты с полной загрузкой in-flight не попадают в кандидаты, вес скоро-истекающих не должен превышать текущий лимит concurrency.
 	p.SetMaxInFlight(1)
 	if !p.Acquire("cn2") {
 		t.Fatal("failed to acquire cn2")
@@ -96,7 +96,7 @@ func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
 		t.Fatalf("in-flight-full weighted candidates=%v want %v", got, want)
 	}
 
-	// 关闭总开关后逐账号只出现一次，旧行为完全恢复。
+	// После отключения главного переключателя появляется только один раз на аккаунт, старое поведение полностью восстановлено.
 	p.SetPreferExpiring(false)
 	got = p.WeightedAvailableUIDsForModelRealm("glm-5.2", "cn")
 	want = []string{"cn1", "cn2"}
@@ -107,7 +107,7 @@ func TestWeightedAvailableUIDsForModelRealm(t *testing.T) {
 
 func TestPickExcludingForRealm(t *testing.T) {
 	p := realmPool(t)
-	// realm=cn → 只从 cn 集合选。
+	// realm=cn → Только из cn выбор из множества.
 	seen := map[string]bool{}
 	for i := 0; i < 50; i++ {
 		a := p.PickExcludingForRealm(nil, "", "cn")
@@ -119,7 +119,7 @@ func TestPickExcludingForRealm(t *testing.T) {
 			t.Fatalf("PickExcludingForRealm(cn) returned global account %s", a.UID)
 		}
 	}
-	// global 同样只从 global 集合。
+	// global также только из global Коллекция.
 	for i := 0; i < 50; i++ {
 		a := p.PickExcludingForRealm(nil, "", "global")
 		if a == nil {
@@ -129,7 +129,7 @@ func TestPickExcludingForRealm(t *testing.T) {
 			t.Fatalf("PickExcludingForRealm(global) returned cn account %s", a.UID)
 		}
 	}
-	// realm=="" → 退化现状：所有 healthy 都能选。
+	// realm=="" → Текущая деградация: все healthy доступны для выбора.
 	for i := 0; i < 50; i++ {
 		a := p.PickExcludingForRealm(nil, "", "")
 		if a == nil {
@@ -140,7 +140,7 @@ func TestPickExcludingForRealm(t *testing.T) {
 
 func TestPickExcludingForRealmTried(t *testing.T) {
 	p := realmPool(t)
-	// tried 排除在 realm 过滤之后（维持请求级轮换语义）。
+	// tried исключить из realm после фильтрации (сохранение семантики ротации на уровне запроса).
 	a := p.PickExcludingForRealm(map[string]bool{"cn1": true}, "", "cn")
 	if a == nil {
 		t.Fatal("tried cn1 → nil")

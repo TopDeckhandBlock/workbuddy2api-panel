@@ -1,9 +1,9 @@
-// device_token.go X-Device-Token 的文件兜底读取（与桌面端共用状态文件）。
+// device_token.go X-Device-Token резервное чтение файла (общий файл состояния с десктопом).
 //
-// 容器内无桌面端 Turing Shield SDK，无法像 Python fork（xiaofan6ya/converter.py）那样
-// 现取 token。这里提供另一条路径：宿主把桌面端生成的 device token 落 /app/data/device_token
-// （或任意挂载路径），网关定期读取注入。读取频率限 5 分钟一次缓存，>1KB 或读失败则忽略
-// （优雅降级不注入，不影响主流程）。
+// в контейнере нет десктоп-клиента Turing Shield SDK，Невозможно как Python fork（xiaofan6ya/converter.py）так
+// Брать текущее token。Здесь предоставляется альтернативный путь: хост передаёт сгенерированное на десктопе device token Сброс /app/data/device_token
+// （или любой mount-путь), шлюз периодически читает инжект. Частота чтения ограничена 5 Кэш раз в минуту,>1KB или игнорировать при ошибке чтения
+// （грейсфул-деградация без инъекции, не влияет на основной поток).
 package upstream
 
 import (
@@ -16,45 +16,45 @@ import (
 
 var errDeviceTokenTooLarge = errors.New("device token file too large")
 
-// deviceTokenFile 文件读取缓存 TTL（秒）。桌面端 SDK 自身也有缓存，这里再兜一层
-// 避免每次出站请求都 stat+read 文件。
+// deviceTokenFile Кэш чтения файлов TTL（сек). Десктоп SDK Есть собственный кэш, здесь еще один слой
+// чтобы каждый исходящий запрос не stat+read файл.
 const deviceTokenFileTTL = 5 * time.Minute
 
-// deviceTokenFileMaxLen token 文件最大字节数。token 通常几百字节；超过 1KB
-// 视为异常（非 token 内容 / 文件被误用），忽略不注入。
+// deviceTokenFileMaxLen token Макс. размер файла в байтах.token Обычно несколько сотен байт; свыше 1KB
+// считается исключением (не token Содержимое / файл использован ошибочно), игнорировать, не инжектировать.
 const deviceTokenFileMaxLen = 1024
 
-// deviceTokenFileCache 缓存 device token 文件读取结果（path → token+读取时刻）。
+// deviceTokenFileCache Кеш device token результат чтения файла (path → token+момента чтения).
 type deviceTokenFileCache struct {
-	mu      sync.Mutex
-	path    string
-	token   string
-	readAt  time.Time
+	mu sync.Mutex
+	path string
+	token string
+	readAt time.Time
 	lastErr error
 }
 
 var dtFileCache = &deviceTokenFileCache{}
 
-// readDeviceTokenFile 读取并缓存 device token 文件；5 分钟内复用上次结果。
-// 返回空串表示无可用 token（文件未配置 / 读失败 / 内容过长 / 空白）。
+// readDeviceTokenFile Чтение и кэширование device token Файл;5 повторное использование предыдущего результата в течение N минут.
+// Возврат пустой строки означает отсутствие доступных token（файл не настроен / Ошибка чтения / Содержимое слишком длинное / пусто).
 func readDeviceTokenFile(path string) string {
 	if path == "" {
 		return ""
 	}
-	// 快路径：缓存命中且未过期，直接返回缓存值。注意全程持锁（defer Unlock）——
-	// 含 5 分钟一次的过期重读（锁内读文件）。调用频率极低（每 5min 最多一次
-	// 文件 IO，文件上限 1KB），锁内 IO 可接受；若未来出现 NFS 挂载 + 高并发的
-	// 部署形态，再上 singleflight 包住重读段（YAGNI，现在不做）。
+	// Быстрый путь: попадание в кэш и не истёк — сразу вернуть значение из кэша. Внимание: удерживать блокировку всё время (defer Unlock）——
+	// Содержит 5 перечитывание по истечении раз в N минут (чтение файла под блокировкой). Частота вызовов крайне низкая (каждые 5min Максимум один раз
+	// Файл IO，Лимит файла 1KB），Внутри блокировки IO Приемлемо; если в будущем появится NFS Монтирование + высококонкурентный
+	// форма развертывания, затем включить singleflight обернуть секцию повторного чтения (YAGNI，сейчас не делать).
 	dtFileCache.mu.Lock()
 	defer dtFileCache.mu.Unlock()
 	if path == dtFileCache.path && time.Since(dtFileCache.readAt) < deviceTokenFileTTL {
 		return dtFileCache.token
 	}
-	// 缓存未命中或过期：重新读文件。
+	// Промах или истечение кэша: перечитать файл.
 	dtFileCache.path = path
 	tok, err := readTrimmedFile(path, deviceTokenFileMaxLen)
 	if err != nil {
-		// 读失败：清空缓存 token，避免注入过期/错误的值。
+		// Ошибка чтения: очистить кэш token，избежать инъекции просроченного/неверного значения.
 		dtFileCache.token = ""
 		dtFileCache.lastErr = err
 		dtFileCache.readAt = time.Now()
@@ -66,7 +66,7 @@ func readDeviceTokenFile(path string) string {
 	return tok
 }
 
-// readTrimmedFile 读文件并 trim 首尾空白，超过 maxLen 返回错误（拒绝过长内容）。
+// readTrimmedFile чтение файла и trim пробелы в начале/конце, превышает maxLen Вернуть ошибку (отклонить слишком длинный контент).
 func readTrimmedFile(path string, maxLen int) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {

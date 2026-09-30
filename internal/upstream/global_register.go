@@ -1,17 +1,17 @@
-// global_register.go 国际版（global realm）新账号注册激活与地区完善。
+// global_register.go Международная версия (global realm）Регистрация и активация нового аккаунта и доработка региона.
 //
-// 背景（ANALYSIS-workbuddy-client-reverse.md）：新 global 账号需先完成注册地区
-// （/login/register/user/complete 补地区）再调 register 接口激活 Trial，chat 才不报
-// 14017 trial not activated。链路（逆向自 web 注册完善页 RegisterRegion-*.js）：
+// Фон (ANALYSIS-workbuddy-client-reverse.md）：новый global Аккаунту необходимо сначала завершить регион регистрации
+// （/login/register/user/complete дополнить регион) повторить вызов register активация интерфейса Trial，chat только тогда не будет ошибки
+// 14017 trial not activated。Трейс (обратно от web Страница дозаполнения регистрации RegisterRegion-*.js）：
 //
-//	POST /billing/area/get-country-code {filterForbidden:1} → 可取国家列表
-//	POST /billing/area/get-user-area-info {action:getUserAreaInfo} → 检测当前地区
-//	POST /console/login/account {attributes:{countryCode,countryFullName,countryName}} → 提交地区（幂等）
-//	GET  /auth/realms/copilot/overseas/user/register?userId=<uid> → 注册激活（code:200 成功；code:500 "region required" 需补地区）
-//	POST /billing/ide/trial → 一次性加油包（幂等码 14051，见 trial.go）
+//	POST /billing/area/get-country-code {filterForbidden:1} → список доступных стран
+//	POST /billing/area/get-user-area-info {action:getUserAreaInfo} → Определить текущий регион
+//	POST /console/login/account {attributes:{countryCode,countryFullName,countryName}} → отправка региона (идемпотентно)
+//	GET /auth/realms/copilot/overseas/user/register?userId=<uid> → регистрация активации (code:200 Успех;code:500 "region required" требуется указать регион)
+//	POST /billing/ide/trial → одноразовый пакет пополнения (идемпотентный ключ 14051，См. trial.go）
 //
-// 响应体注意：get-country-code / get-user-area-info 的 data 是 JSON 字符串
-// （双层信封），需二次解析。
+// Внимание к телу ответа:get-country-code / get-user-area-info data Да JSON Строка
+// （двойной конверт), требуется повторный парсинг.
 package upstream
 
 import (
@@ -25,21 +25,21 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// globalWebUA 国际版 web 端 UA（注册完善页走 web 指纹，非桌面端 CLI 指纹）。
+// globalWebUA Международная версия web Конец UA（Страница дозаполнения регистрации идет через web Отпечаток, не десктоп CLI отпечаток).
 const globalWebUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-// GlobalCountry 可选注册地区（对应 get-country-code 的 list 元素）。
+// GlobalCountry опциональный регион регистрации (соответствует get-country-code list элементов).
 type GlobalCountry struct {
-	EnName string `json:"EnName"` // 英文全名（countryFullName）
-	Name   string `json:"Name"`   // 显示名
-	IOS2   string `json:"IOS2"`   // 二字码（countryName）
-	IOS3   string `json:"IOS3"`
-	Code   string `json:"Code"` // 数字码（countryCode）
+	EnName string `json:"EnName"` // Полное имя на английском (countryFullName）
+	Name string `json:"Name"` // отображаемое имя
+	IOS2 string `json:"IOS2"` // двухбуквенный код (countryName）
+	IOS3 string `json:"IOS3"`
+	Code string `json:"Code"` // Цифровой код (countryCode）
 }
 
-// globalRegisterBase 注册激活端点的 base（注册链路在 www.workbuddy.ai，与 globalBillingBase 同域）。
-// 独立成方法便于测试替换。
+// globalRegisterBase регистрации эндпоинта активации base（Цепочка регистрации в www.workbuddy.ai，и globalBillingBase тот же домен).
+// вынесено в отдельный метод для тестируемости/подмены.
 func (c *Client) globalRegisterBase() string {
 	if c.BillingBaseGlobal != "" {
 		return c.BillingBaseGlobal
@@ -47,7 +47,7 @@ func (c *Client) globalRegisterBase() string {
 	return defaultGlobalBase
 }
 
-// globalRegisterReq 注册链路通用请求构造：web 指纹 UA + Origin/Referer 同域 + Bearer。
+// globalRegisterReq общая конструкция запроса цепочки регистрации:web Фингерпринт UA + Origin/Referer Тот же домен + Bearer。
 func (c *Client) globalRegisterReq(method, url, token string, body any) (*http.Request, error) {
 	var rdr io.Reader
 	if body != nil {
@@ -73,7 +73,7 @@ func (c *Client) globalRegisterReq(method, url, token string, body any) (*http.R
 	return req, nil
 }
 
-// globalRegisterJSON 发注册链路请求并解外层信封（code/msg）。
+// globalRegisterJSON отправить запрос цепочки регистрации и распаковать внешний конверт (code/msg）。
 func (c *Client) globalRegisterJSON(req *http.Request) (code int, msg string, raw json.RawMessage, err error) {
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -82,8 +82,8 @@ func (c *Client) globalRegisterJSON(req *http.Request) (code int, msg string, ra
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var env struct {
-		Code int             `json:"code"`
-		Msg  string          `json:"msg"`
+		Code int `json:"code"`
+		Msg string `json:"msg"`
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
@@ -92,8 +92,8 @@ func (c *Client) globalRegisterJSON(req *http.Request) (code int, msg string, ra
 	return env.Code, env.Msg, env.Data, nil
 }
 
-// GlobalFetchCountries 拉取可选注册地区列表（global 账号登录后调用）。
-// intlOnly=true 时按国际版 web 白名单过滤（HK/MO/SG/TH/PH/MY/ID，对齐 web 展示集）。
+// GlobalFetchCountries получить список доступных регионов регистрации (global вызов после логина аккаунта).
+// intlOnly=true тогда по международной версии web фильтрация по белому списку (HK/MO/SG/TH/PH/MY/ID，Выравнивание web набор отображения).
 func (c *Client) GlobalFetchCountries(a *auth.Auth, intlOnly bool) ([]GlobalCountry, error) {
 	if a == nil || a.Realm() != "global" {
 		return nil, fmt.Errorf("fetch countries: only global accounts")
@@ -109,7 +109,7 @@ func (c *Client) GlobalFetchCountries(a *auth.Auth, intlOnly bool) ([]GlobalCoun
 	if code != 0 {
 		return nil, fmt.Errorf("get-country-code: %s (code=%d)", msg, code)
 	}
-	// data 是 JSON 字符串（双层信封）或对象，需二次解析。
+	// data Да JSON Строка (двойной конверт) или объект, требуется вторичный парсинг.
 	var inner struct {
 		Data struct {
 			List []GlobalCountry `json:"list"`
@@ -129,7 +129,7 @@ func (c *Client) GlobalFetchCountries(a *auth.Auth, intlOnly bool) ([]GlobalCoun
 	if !intlOnly {
 		return list, nil
 	}
-	// 国际版 web 白名单过滤（HK, MO, SG, TH, PH, MY, ID，顺序对齐 web 展示）。
+	// Международная версия web фильтрация по белому списку (HK, MO, SG, TH, PH, MY, ID，выравнивание порядка web отображение).
 	whitelist := []string{"HK", "MO", "SG", "TH", "PH", "MY", "ID"}
 	byCode := make(map[string]GlobalCountry, len(list))
 	for _, ctry := range list {
@@ -144,7 +144,7 @@ func (c *Client) GlobalFetchCountries(a *auth.Auth, intlOnly bool) ([]GlobalCoun
 	return out, nil
 }
 
-// GlobalRegisterStatus 报告 global 账号注册激活状态：是否需要补地区、是否已激活。
+// GlobalRegisterStatus отчет global статус регистрации/активации аккаунта: требуется ли дополнить регион, активирован ли.
 func (c *Client) GlobalRegisterStatus(a *auth.Auth) (activated bool, needsRegion bool, msg string, err error) {
 	if a == nil || a.Realm() != "global" {
 		return false, false, "", fmt.Errorf("register status: only global accounts")
@@ -170,15 +170,15 @@ func (c *Client) GlobalRegisterStatus(a *auth.Auth) (activated bool, needsRegion
 	}
 }
 
-// GlobalSubmitRegion 提交注册地区（幂等）。country 来自 GlobalFetchCountries。
+// GlobalSubmitRegion Отправка региона регистрации (идемпотентно).country из GlobalFetchCountries。
 func (c *Client) GlobalSubmitRegion(a *auth.Auth, country GlobalCountry) error {
 	if a == nil || a.Realm() != "global" {
 		return fmt.Errorf("submit region: only global accounts")
 	}
 	attrs := map[string]any{
-		"countryCode":     []string{country.Code},
+		"countryCode": []string{country.Code},
 		"countryFullName": []string{country.EnName},
-		"countryName":     []string{country.IOS2},
+		"countryName": []string{country.IOS2},
 	}
 	req, err := c.globalRegisterReq(http.MethodPost, c.globalRegisterBase()+"/console/login/account",
 		a.AccessTokenValue(), map[string]any{"attributes": attrs})
@@ -195,9 +195,9 @@ func (c *Client) GlobalSubmitRegion(a *auth.Auth, country GlobalCountry) error {
 	return nil
 }
 
-// GlobalCompleteRegistration 一键注册激活：先查状态，需补地区则按默认地区（白名单首个，
-// 通常 HK）提交后重新激活。activated 表示调用后账号已激活可用。幂等（已激活直接返回）。
-// 失败不阻断调用方（panel login 已落盘），仅返回错误供日志。
+// GlobalCompleteRegistration Активация регистрацией в один клик: сначала проверить статус, при необходимости дополнить регион по региону по умолчанию (первый из вайтлиста,
+// Обычно HK）Повторная активация после коммита.activated Означает, что аккаунт активен и доступен после вызова. Идемпотентно (если уже активен — прямой возврат).
+// Ошибка не блокирует вызывающую сторону (panel login уже сохранено на диск), возвращается только ошибка для лога.
 func (c *Client) GlobalCompleteRegistration(a *auth.Auth) (activated bool, err error) {
 	activated, needsRegion, msg, err := c.GlobalRegisterStatus(a)
 	if err != nil {
@@ -209,7 +209,7 @@ func (c *Client) GlobalCompleteRegistration(a *auth.Auth) (activated bool, err e
 	if !needsRegion {
 		return false, fmt.Errorf("register not activated: %s", msg)
 	}
-	// 需补地区：拉白名单，取首个（HK）提交。
+	// требуется указать регион: загрузить белый список, взять первый (HK）Отправить.
 	countries, err := c.GlobalFetchCountries(a, true)
 	if err != nil {
 		return false, fmt.Errorf("fetch countries: %w", err)
@@ -220,7 +220,7 @@ func (c *Client) GlobalCompleteRegistration(a *auth.Auth) (activated bool, err e
 	if err := c.GlobalSubmitRegion(a, countries[0]); err != nil {
 		return false, fmt.Errorf("submit region: %w", err)
 	}
-	// 重新激活验证。
+	// Повторная проверка активации.
 	activated, needsRegion, msg, err = c.GlobalRegisterStatus(a)
 	if err != nil {
 		return false, err

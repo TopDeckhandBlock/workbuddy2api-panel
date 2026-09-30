@@ -1,6 +1,6 @@
-// scheduler_wait_test.go 钉住 waitSlot 的三态与墙钟口径：timer 的等待基于单调
-// 时钟，机器睡眠会冻结它——分段等待 + 每段墙钟重判把冻结的影响限制在一段之内
-// （「睡眠不足整个等待周期时 fire 被顺延、墙钟时点被错过且不补跑」的正面修复）。
+// scheduler_wait_test.go Закрепить waitSlot три состояния и wall-clock метрика:timer ожидание на основе монотонных
+// таймер, сон машины замораживает его — ожидание по сегментам + Переоценка по wall-clock каждый интервал ограничивает влияние заморозки одним интервалом
+// （「При сне меньше всего периода ожидания fire исправление кейса "перенос, пропуск wall-clock момента без догона»).
 package scheduler
 
 import (
@@ -14,31 +14,31 @@ func newTestScheduler() *Scheduler {
 	return s
 }
 
-// TestWaitSlotFiresAtWallclock 到点返回 slotFired：
-//  - next 已过（墙钟已越过时点、timer 尚未设置的形态）→ 立即返回，不等下一段；
-//  - next 未到（多段等待）→ 到点才返回，且不早于计划时刻。
+// TestWaitSlotFiresAtWallclock возврат по расписанию slotFired：
+// - next Уже прошло (wall-clock прошел момент,timer ещё не заданной формы)→ вернуть немедленно, не ждать следующий чанк;
+// - next ещё не наступило (многоэтапное ожидание)→ Возврат только по наступлении времени, не ранее запланированного момента.
 func TestWaitSlotFiresAtWallclock(t *testing.T) {
 	s := newTestScheduler()
 
-	// 墙钟已越过的形态：修复目标——睡眠冻结 timer 后醒来第一件事就是发现已到点。
+	// Состояние, уже пройденное по wall-clock: цель исправления — заморозка сна timer после пробуждения сразу обнаружено наступление времени.
 	past := time.Now().Add(-time.Second)
 	if got := s.waitSlot(context.Background(), past, time.Hour); got != slotFired {
-		t.Fatalf("已越过时点应立即 slotFired，got %v", got)
+		t.Fatalf("При наступлении момента выполнить немедленно slotFired，got %v", got)
 	}
 
-	// 未来时点：多段等待到点。
+	// Будущий момент: многосегментное ожидание до наступления.
 	next := time.Now().Add(45 * time.Millisecond)
 	start := time.Now()
 	if got := s.waitSlot(context.Background(), next, 10*time.Millisecond); got != slotFired {
-		t.Fatalf("到点应 slotFired，got %v", got)
+		t.Fatalf("По достижении времени должен slotFired，got %v", got)
 	}
 	if time.Since(start) < 40*time.Millisecond {
-		t.Errorf("提前返回：等待 %v，未到计划时刻", time.Since(start))
+		t.Errorf("Ранний возврат: ожидание %v，Запланированное время не наступило", time.Since(start))
 	}
 }
 
-// TestWaitSlotRearm 等待中收到 rearmSchedule（在线改配置重排）→ 立即 slotRearm，
-// 不等满剩余时长（段长不影响 rearm 响应性）。
+// TestWaitSlotRearm получено в ожидании rearmSchedule（онлайн-изменение конфига с перестановкой)→ Немедленно slotRearm，
+// Не дожидаться полного оставшегося времени (длина отрезка не влияет rearm отзывчивость).
 func TestWaitSlotRearm(t *testing.T) {
 	s := newTestScheduler()
 	next := time.Now().Add(2 * time.Second)
@@ -49,14 +49,14 @@ func TestWaitSlotRearm(t *testing.T) {
 	}()
 	start := time.Now()
 	if got := s.waitSlot(context.Background(), next, 10*time.Millisecond); got != slotRearm {
-		t.Fatalf("rearm 应返回 slotRearm，got %v", got)
+		t.Fatalf("rearm должен вернуть slotRearm，got %v", got)
 	}
 	if time.Since(start) > 500*time.Millisecond {
-		t.Errorf("rearm 响应过慢：%v", time.Since(start))
+		t.Errorf("rearm Слишком медленный ответ:%v", time.Since(start))
 	}
 }
 
-// TestWaitSlotCancel ctx 取消 → slotCancel，优雅退出。
+// TestWaitSlotCancel ctx отмена → slotCancel，graceful shutdown.
 func TestWaitSlotCancel(t *testing.T) {
 	s := newTestScheduler()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,9 +68,9 @@ func TestWaitSlotCancel(t *testing.T) {
 	}()
 	start := time.Now()
 	if got := s.waitSlot(ctx, next, 10*time.Millisecond); got != slotCancel {
-		t.Fatalf("取消应返回 slotCancel，got %v", got)
+		t.Fatalf("При отмене должен вернуть slotCancel，got %v", got)
 	}
 	if time.Since(start) > 500*time.Millisecond {
-		t.Errorf("取消响应过慢：%v", time.Since(start))
+		t.Errorf("Отмена: слишком медленный ответ:%v", time.Since(start))
 	}
 }

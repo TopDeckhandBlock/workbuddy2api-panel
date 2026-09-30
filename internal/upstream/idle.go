@@ -1,4 +1,4 @@
-// idle.go 聊天 SSE 流中空闲监控：活跃吐数据续命不掐，静默超过阈值才断流（释放租约）。
+// idle.go Чат SSE Мониторинг простоя в потоке: при активной отдаче данных продлевать без разрыва, рвать поток только при тишине сверх порога (освобождение лиза).
 package upstream
 
 import (
@@ -8,16 +8,16 @@ import (
 	"time"
 )
 
-// idleMonitoringBody 包在聊天 SSE body 外层：
-// 每次读到底层数据（n>0）就刷新 lastRead；后台 goroutine 周期检查，
-// 静默超过 idle 就 cancel 请求 context，中断阻塞中的 Read。
+// idleMonitoringBody в составе чата SSE body Внешний уровень:
+// Каждый раз чтение до низкоуровневых данных (n>0）то обновить lastRead；бэкенд goroutine Периодическая проверка,
+// тишина более idle — cancel Запрос context，прервать блокирующий Read。
 type idleMonitoringBody struct {
-	rc       io.ReadCloser
-	mu       sync.Mutex
+	rc io.ReadCloser
+	mu sync.Mutex
 	lastRead time.Time
 	stopOnce sync.Once
-	stopCh   chan struct{}
-	cancel   context.CancelFunc
+	stopCh chan struct{}
+	cancel context.CancelFunc
 }
 
 func (b *idleMonitoringBody) Read(p []byte) (int, error) {
@@ -30,7 +30,7 @@ func (b *idleMonitoringBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Close 停掉后台 goroutine、取消请求 context、关闭底流，保证无泄漏。
+// Close Остановить фон goroutine、отменить запрос context、закрыть underlying stream, гарантировать отсутствие утечек.
 func (b *idleMonitoringBody) Close() error {
 	b.stopOnce.Do(func() { close(b.stopCh) })
 	b.cancel()
@@ -43,18 +43,18 @@ func (b *idleMonitoringBody) idleFor() time.Duration {
 	return time.Since(b.lastRead)
 }
 
-// monitorBody 若 idle<=0 直接返回原底流（禁用空闲监控）；
-// 否则包上流中空闲监控。计时从返回 body 之后开始——首字节阶段由
-// Transport.ResponseHeaderTimeout 管，这里不抢跑。
+// monitorBody Если idle<=0 прямой возврат исходного потока (мониторинг idle отключён);
+// Иначе — мониторинг простоя апстрима. Отсчёт с возврата body начнётся после — этап первого байта обеспечивает
+// Transport.ResponseHeaderTimeout управляет, здесь без опережения.
 func monitorBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc) io.ReadCloser {
 	if idle <= 0 {
 		return rc
 	}
 	b := &idleMonitoringBody{
-		rc:       rc,
+		rc: rc,
 		lastRead: time.Now(),
-		stopCh:   make(chan struct{}),
-		cancel:   cancel,
+		stopCh: make(chan struct{}),
+		cancel: cancel,
 	}
 	go func() {
 		t := time.NewTicker(idleTick(idle))
@@ -74,7 +74,7 @@ func monitorBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc
 	return b
 }
 
-// idleTick 返回监控周期：idle/4，钳在 [10ms, 1s]。小 idle 也能快速发现，大小值避免空转。
+// idleTick Период мониторинга возврата:idle/4，Кламп на [10ms, 1s]。Малый idle также быстро обнаруживается, мин/макс значения предотвращают холостой ход.
 func idleTick(idle time.Duration) time.Duration {
 	d := idle / 4
 	if d > time.Second {

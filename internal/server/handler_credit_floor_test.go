@@ -1,5 +1,5 @@
-// handler_credit_floor_test.go 积分保底的可观测性与端到端拦截：
-// /status 透出 credit_floor；触底账号打收费模型时网关无号可选（503）。
+// handler_credit_floor_test.go Наблюдаемость гарантированного минимума баллов и сквозная блокировка:
+// /status прокинуть наружу credit_floor；при обращении исчерпанного аккаунта к платной модели у шлюза нет доступных номеров (503）。
 package server
 
 import (
@@ -12,9 +12,9 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
-// TestStatusCreditFloor /status 透出 pool 层的 credit_floor 生效值：
-// 运维查账时一并看到保底线（结合 accounts[].credits 与 model_costs 即可判定
-// 某号为何对某模型不出票）。关闭（0）时也显式透出——缺失会让人误以为没记录。
+// TestStatusCreditFloor /status прокинуть наружу pool уровня credit_floor действующее значение:
+// при аудите видны и минимальные гарантии (совместно с accounts[].credits и model_costs можно считать установленным
+// почему аккаунт не выдает тикет для модели). Выключено (0）также явно отображается — отсутствие заставит думать, что записи нет.
 func TestStatusCreditFloor(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCreditFloor(100)
@@ -33,7 +33,7 @@ func TestStatusCreditFloor(t *testing.T) {
 	}
 }
 
-// TestStatusCreditFloorZeroOff 未配置（默认 0）同样透出 0（显式写出，零值不省略）。
+// TestStatusCreditFloorZeroOff Не настроено (по умолчанию 0）Также пробрасывается 0（записывать явно, ноль не опускать).
 func TestStatusCreditFloorZeroOff(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
@@ -48,63 +48,63 @@ func TestStatusCreditFloorZeroOff(t *testing.T) {
 	}
 }
 
-// TestCreditFloorBlocksPaidRequest 端到端：触底 + 实测收费模型 → 选号无候选，
-// 网关回 503（硬语义：宁 503 不打穿；免费模型照常可用）。
+// TestCreditFloorBlocksPaidRequest End-to-end: достигнуто дно + Фактическая тарифицируемая модель → нет кандидатов для выбора номера,
+// Ответ шлюза 503（строгая семантика: лучше 503 не пробивать; бесплатные модели доступны как обычно).
 //
-// 诚实性约束：本用例的 upstream 是打不通的假上游，floor 开与关最终都回 503——
-// 若只断言 503，就无法区分「floor 拦的」与「上游不可达」，断言会被虚假原因满足。
-// 真正证明拦截落在选号层的是**对照断言**：对照组（不开 floor）必须能选到 poor，
-// 实验组（开 floor）必须在同一条件下选不到号。
+// Ограничение честности: в данном кейсе upstream фиктивный недоступный апстрим,floor вкл. и выкл. в итоге оба возвращаются в 503——
+// если assert только 503，невозможно различить "floor заблокировано» и "апстрим недоступен», ассерт будет ложно выполнен по неверной причине.
+// Реальное доказательство того, что перехват на уровне выбора номера — это**Сверочный assert**：контрольная группа (без включения floor）должен быть выбираем poor，
+// экспериментальная группа (вкл floor）При тех же условиях номер не должен выбираться.
 func TestCreditFloorBlocksPaidRequest(t *testing.T) {
 	const body = `{"model":"paid-model","messages":[{"role":"user","content":"hi"}]}`
-	// 对照组：不设 floor，其余逐字相同（同一触底号、同一 tier 2 观测）。
+	// Контрольная группа: не задавать floor，остальное дословно совпадает (тот же нижний номер, тот же tier 2 наблюдением).
 	ctlPool := testPoolWith(&auth.Auth{UID: "poor", AccessToken: "at", ExpiresAt: 9999999999})
 	ctlPool.SetCredits("poor", 30, 0)
 	ctlPool.NoteModelCost("poor", "paid-model", 2.9, 1000)
 	if a := ctlPool.PickExcludingForRealm(nil, "paid-model", ""); a == nil {
-		t.Fatal("对照组前置失效：未设 floor 时应选到 poor（否则本用例不构成对照）")
+		t.Fatal("Отказ префильтра контрольной группы: не задано floor должен быть выбран poor（иначе данный кейс не считается контрольным)")
 	}
 
-	// 实验组：开 floor 100。
+	// Экспериментальная группа: вкл floor 100。
 	p := testPoolWith(&auth.Auth{UID: "poor", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCreditFloor(100)
 	p.SetCredits("poor", 30, 0)
 	p.NoteModelCost("poor", "paid-model", 2.9, 1000)
 	if a := p.PickExcludingForRealm(nil, "paid-model", ""); a != nil {
-		t.Fatalf("floor 应在 pool 层拦住触底号，got %v（拦截必须发生在选号层，而非靠上游报错）", a.UID)
+		t.Fatalf("floor Должен быть в pool слой блокирует исчерпанные аккаунты,got %v（блокировка должна быть на уровне выбора номера, а не за счёт ошибки апстрима)", a.UID)
 	}
 
 	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
 	if rec.Code != 503 {
-		t.Fatalf("code=%d want 503（全池触底 + 收费模型 → 不放行）, body=%s", rec.Code, rec.Body)
+		t.Fatalf("code=%d want 503（весь пул исчерпан + Модель тарификации → Не пропускать), body=%s", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Body.String(), "no_healthy_account") {
 		t.Errorf("body=%s want no_healthy_account", rec.Body)
 	}
 }
 
-// TestCreditFloorAllowsFreeRequest 端到端：同一触底号打免费模型照常透出（非 503）。
-// 这是保底的立身之本——保完了就得还能用。
+// TestCreditFloorAllowsFreeRequest End-to-end: тот же исчерпанный аккаунт для бесплатных моделей пропускается как обычно (не 503）。
+// Это основа гарантии — после срабатывания система должна оставаться работоспособной.
 func TestCreditFloorAllowsFreeRequest(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "poor", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCreditFloor(100)
 	p.SetCredits("poor", 30, 0)
 	p.NoteModelCost("poor", "free-model", 0, 1000)
 
-	// 选号层面必须出票（上游转发失败与否不在本用例关心范围，见 TestCreditFloor* 单测）。
+	// На уровне выбора номера билет обязателен (успех форварда апстрима вне скоупа кейса, см. TestCreditFloor* юнит-тест).
 	if a := p.PickExcludingForRealm(nil, "free-model", ""); a == nil || a.UID != "poor" {
-		t.Fatalf("触底号打免费模型应选到号，got %v", a)
+		t.Fatalf("упёртый в лимит номер при вызове бесплатной модели должен выбираться,got %v", a)
 	}
-	// pool 层与 handler 层口径一致（避免 handler 绕过 pool 的 floor 判定）。
+	// pool слой и handler единая метрика уровня (во избежание handler Обход pool floor проверка).
 	if p.PickByUIDForModel("poor", "free-model") == nil {
-		t.Error("粘性路径对免费模型不应被 floor 拦")
+		t.Error("sticky-маршрут для бесплатных моделей не должен floor Блокировка")
 	}
 }
 
-// TestCreditFloorPersistsAcquireRelease 保底拦截不影响在途租约语义：
-// 触底 + 收费 → Acquire 仍可占名额（floor 只在选号层拦），释放幂等。
+// TestCreditFloorPersistsAcquireRelease гарантированный перехват не влияет на семантику активных лизов:
+// Достигнуто дно + платный → Acquire всё ещё занимает слот (floor Блокировка только на уровне выбора номера), освобождение идемпотентно.
 func TestCreditFloorPersistsAcquireRelease(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "poor", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetCreditFloor(100)
@@ -113,8 +113,8 @@ func TestCreditFloorPersistsAcquireRelease(t *testing.T) {
 	p.SetMaxInFlight(2)
 
 	if !p.Acquire("poor") {
-		t.Fatal("Acquire 应成功（floor 不介入租约语义）")
+		t.Fatal("Acquire должен завершиться успешно (floor не вмешивается в семантику аренды)")
 	}
 	p.Release("poor")
-	p.Release("poor") // 幂等释放不扣成负数
+	p.Release("poor") // идемпотентный релиз не уходит в минус
 }

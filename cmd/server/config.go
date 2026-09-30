@@ -1,4 +1,4 @@
-// config.go 加载 JSON 配置 + 环境变量覆盖。
+// config.go Загрузка JSON Конфигурация + Переопределение переменными окружения.
 package main
 
 import (
@@ -15,197 +15,197 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 )
 
-// Config 顶层配置。
+// Config конфигурация верхнего уровня.
 type Config struct {
-	Listen    string `json:"listen"`     // ":7863"
-	APIKey    string `json:"api_key"`    // 空 = 不鉴权
-	AuthDir   string `json:"auth_dir"`   // ./auths
+	Listen string `json:"listen"` // ":7863"
+	APIKey string `json:"api_key"` // пустой = Без аутентификации
+	AuthDir string `json:"auth_dir"` // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
 
 	Panel struct {
-		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
+		// PackageDetailLimit На странице состава баллов на аккаунт по умолчанию показывается кол-во ближайших к истечению пакетов;<=0 откат 5。
 		PackageDetailLimit int `json:"package_detail_limit"`
 	} `json:"panel"`
 
 	Logging struct {
-		// RequestArchiveEnabled 请求元数据 JSONL 归档开关，缺省 true。
+		// RequestArchiveEnabled Метаданные запроса JSONL Переключатель архивации, по умолчанию true。
 		RequestArchiveEnabled bool `json:"request_archive_enabled"`
-		// RequestRetentionDays 归档保留天数，缺省 7；<=0 回落默认。
+		// RequestRetentionDays Дней хранения архива, по умолчанию 7；<=0 Фолбэк на дефолт.
 		RequestRetentionDays int `json:"request_retention_days"`
-		// RequestArchiveMaxMB 归档总上限（MiB），缺省 100；<=0 回落默认。
+		// RequestArchiveMaxMB общий лимит архивации (MiB），по умолчанию 100；<=0 Фолбэк на дефолт.
 		RequestArchiveMaxMB int `json:"request_archive_max_mb"`
-		// RequestClientInfo 是否在请求日志（归档事件 + stdout 流水行 + 面板运行
-		// 日志）里记录调用来源：客户端 IP 与 User-Agent。缺省 true。
+		// RequestClientInfo есть ли в логе запросов (архивное событие + stdout Строка лога + Работа панели
+		// в логах) фиксировать источник вызова: клиент IP и User-Agent。по умолчанию true。
 		//
-		// 为什么做成开关而不是恒开：来源信息是排查"谁在打网关"的第一手线索，
-		// 但它比 token 计数敏感（IP 属个人信息），共享部署/多租户场景可能需要
-		// 关掉。关闭后 Event.ClientIP/UserAgent 保持为空，归档里不出现该字段。
-		// 热生效（经 livecfg 快照），无需重启。
+		// почему сделано переключателем, а не всегда вкл: инфо об источнике для отладки"кто бьет в шлюз"первичная улика,
+		// Но оно чем token чувствительно к подсчету (IP относится к PII), shared deployment/В мультитенантном сценарии может потребоваться
+		// выключить. После выключения Event.ClientIP/UserAgent оставить пустым, в архиве поле не появляется.
+		// горячее применение (через livecfg снимок), перезапуск не требуется.
 		RequestClientInfo bool `json:"request_client_info"`
 	} `json:"logging"`
 
 	Cooldown struct {
-		// hard_credit / err_threshold / err_cooldown 三个历史键已退役：
-		// 硬冷却固定为次日 04:00（CooldownUntilTomorrow4AM），连续错误语义并入熔断器。
-		// 旧 config 中的这些键因 JSON 未知字段而自然忽略，不报错。
-		SoftRate string `json:"soft_rate"` // "600s"，软限流冷却基数
-		// SoftRateMax 软冷却指数退避的封顶，默认 "2h"。
-		// 空值回落默认，非法值报错（处理风格同 soft_rate）。
+		// hard_credit / err_threshold / err_cooldown Три исторических ключа выведены из употребления:
+		// Жёсткий кулдаун фиксирован до след. дня 04:00（CooldownUntilTomorrow4AM），семантика последовательных ошибок включена в circuit breaker.
+		// старый config эти ключи в JSON Неизвестные поля игнорируются без ошибки.
+		SoftRate string `json:"soft_rate"` // »600s"，База кулдауна мягкого лимита
+		// SoftRateMax Потолок экспоненциального бэкоффа мягкого кулдауна, по умолчанию "2h"。
+		// null → фолбэк на дефолт, невалид → ошибка (стиль обработки как у soft_rate）。
 		SoftRateMax string `json:"soft_rate_max"` // "2h"
 	} `json:"cooldown"`
 
 	Schedule struct {
-		CheckinHours   []int `json:"checkin_hours"`   // [9,21]
-		TravelHours    []int `json:"travel_hours"`    // [9,21]
-		ActivityHours  []int `json:"activity_hours"`  // [10]
+		CheckinHours []int `json:"checkin_hours"` // [9,21]
+		TravelHours []int `json:"travel_hours"` // [9,21]
+		ActivityHours []int `json:"activity_hours"` // [10]
 		KeepaliveHours []int `json:"keepalive_hours"` // [22]
-		BlackcatHours  []int `json:"blackcat_hours"`  // [23] 夜猫子窗口（23:00–08:00 计数）
-		GrowthHours    []int `json:"growth_hours"`    // [1] 成长任务队列（Sequential 族每日零点解锁，01:00 自动扫描执行）
-		// CheckinEnabled/TravelEnabled/ActivityEnabled/KeepaliveEnabled/BlackcatEnabled 显式禁用开关（缺省 true）。
+		BlackcatHours []int `json:"blackcat_hours"` // [23] окно »совы" (23:00–08:00 счётчик)
+		GrowthHours []int `json:"growth_hours"` // [1] Очередь задач роста (Sequential семейство разблокируется ежедневно в 00:00,01:00 автосканирование и выполнение)
+		// CheckinEnabled/TravelEnabled/ActivityEnabled/KeepaliveEnabled/BlackcatEnabled явный выключатель отключения (по умолчанию true）。
 		//
-		// 为什么用独立 bool 而不是空数组/哨兵值表意"禁用"：
-		//   - 空数组与 null 在老语义里已被"未配置 → 回落默认"占用，改判会静默翻转
-		//     所有老 config 的行为（用户只想删掉一行，结果关掉了签到）；bool 缺省 true
-		//     则对老配置零影响，向后完全兼容。
-		//   - 开关与取值解耦：禁用时仍保留用户显式配的小时，重新启用无需补配。
-		//   - 无需猜测哨兵（[-1] 之类），非法小时一律报错并提示改用本开关。
-		// 旧 config 里的该键因 JSON 未知字段而自然忽略，不报错。
-		CheckinEnabled   bool `json:"checkin_enabled"`   // 缺省 true；false = 关签到
-		TravelEnabled    bool `json:"travel_enabled"`    // 缺省 true；false = 完全停猫猫旅行
-		ActivityEnabled  bool `json:"activity_enabled"`  // 缺省 true；false = 停活跃上报
-		KeepaliveEnabled bool `json:"keepalive_enabled"` // 缺省 true；false = 关 token 保活
-		BlackcatEnabled  bool `json:"blackcat_enabled"`  // 缺省 true；false = 关夜猫子
-		GrowthEnabled    bool `json:"growth_enabled"`    // 缺省 true；false = 关成长任务自动排程
+		// почему отдельный bool а не пустой массив/сентинел-значение"Отключено"：
+		// - Пустой массив и null в старой семантике уже"Не настроено → откат к дефолту"занято, смена вердикта тихо инвертирует
+		// все старые config поведение (пользователь хотел удалить одну строку, а отключил check-in);bool по умолчанию true
+		// то на старую конфигурацию не влияет, полная обратная совместимость.
+		// - Развязка переключателя и значения: при отключении сохраняется явно заданный пользователем час, повторное включение без доп. настройки.
+		// - не нужно угадывать sentinel ([-1] и т.п.), невалидный час — ошибка с подсказкой использовать этот переключатель.
+		// старый config этот ключ в нем из-за JSON Неизвестные поля игнорируются без ошибки.
+		CheckinEnabled bool `json:"checkin_enabled"` // по умолчанию true；false = отключить регистрацию
+		TravelEnabled bool `json:"travel_enabled"` // по умолчанию true；false = Полностью остановить Cat Travel
+		ActivityEnabled bool `json:"activity_enabled"` // по умолчанию true；false = Остановить отчёт об активности
+		KeepaliveEnabled bool `json:"keepalive_enabled"` // по умолчанию true；false = закрыть token Keepalive
+		BlackcatEnabled bool `json:"blackcat_enabled"` // по умолчанию true；false = выкл. ночной режим
+		GrowthEnabled bool `json:"growth_enabled"` // по умолчанию true；false = авто-планирование задач роста, связанных с
 
-		// 余额后台周期刷新：两次签到时点之间 credits 也能保持新鲜（面板/状态观测用）。
-		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
-		BalanceRefreshEnabled bool `json:"balance_refresh_enabled"` // 缺省 true；false = 关闭
-		BalanceRefreshMinutes int  `json:"balance_refresh_minutes"` // 缺省 5；<=0 回落 5
+		// фоновое периодическое обновление баланса: между двумя точками check-in credits также остаётся свежим (панель/для наблюдения состояния).
+		// Семантика разморозки как у check-in (баланс > 0 охлажденные аккаунты автоматически размораживаются), но без чекина не обновлять token。
+		BalanceRefreshEnabled bool `json:"balance_refresh_enabled"` // по умолчанию true；false = Закрыть
+		BalanceRefreshMinutes int `json:"balance_refresh_minutes"` // по умолчанию 5；<=0 откат 5
 	} `json:"schedule"`
 
 	Global struct {
-		// Enabled global realm 路由开关。缺省 true：Realm() 正常把 realm=global/
-		// domain=workbuddy.ai 的账号判为 global 并路由 global base/路径。
-		// 显式 "enabled": false 关闭（逃生门，纯 CN 锁定：即便 auth 写了 realm=global
-		// 也不路由，auth.Realm() 双保险的第一道闸）。纯 CN 部署行为不变：CN 账号
-		// 恒判 cn，global base 只在 realm=global 的账号上被使用。
+		// Enabled global realm Переключатель маршрутизации. По умолчанию true：Realm() Обычно realm=global/
+		// domain=workbuddy.ai аккаунт классифицируется как global и маршрутизировать global base/Путь.
+		// Явно "enabled": false Отключено (аварийный выход, чисто CN блокировка: даже если auth записано realm=global
+		// Также не маршрутизировать,auth.Realm() первый шлюз двойной страховки). Чисто CN Поведение деплоя без изменений:CN Аккаунт
+		// постоянная проверка cn，global base Только в realm=global использовано на аккаунте.
 		Enabled bool `json:"enabled"`
-		// ChatBase / BillingBase 国际版上游 base 覆盖；空 = 回落内置默认
+		// ChatBase / BillingBase Международный апстрим base Перекрытие; пусто = откат на встроенный дефолт
 		// https://www.workbuddy.ai（internal/upstream.defaultGlobalBase）。
-		ChatBase    string `json:"chat_base"`
+		ChatBase string `json:"chat_base"`
 		BillingBase string `json:"billing_base"`
 	} `json:"global"`
 
 	Upstream struct {
-		// TimeoutSeconds 短 RPC（refresh/checkin/balance/FetchModels）总时长上限，默认 120。
+		// TimeoutSeconds Короткий RPC（refresh/checkin/balance/FetchModels）Верхний лимит общего времени, по умолчанию 120。
 		TimeoutSeconds int `json:"timeout_seconds"`
-		// HeaderTimeoutSeconds 聊天 SSE 首字节前（响应头）上限；<=0 回落 TimeoutSeconds。
+		// HeaderTimeoutSeconds Чат SSE Лимит до первого байта (заголовки ответа);<=0 откат TimeoutSeconds。
 		HeaderTimeoutSeconds int `json:"header_timeout_seconds"`
-		// IdleTimeoutSeconds 聊天 SSE 流中空闲上限（活跃吐数据续命不掐）；<=0 回落默认 300。
+		// IdleTimeoutSeconds Чат SSE лимит простоя потока (активная отдача данных продлевает жизнь, не рвать);<=0 откат к дефолту 300。
 		IdleTimeoutSeconds int `json:"idle_timeout_seconds"`
-		// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
-		// 全部出站请求生效：chat/refresh/checkin/balance/report/travel/FetchModels。
-		// 默认值已对齐官方 WorkBuddy 桌面形态（三段式），用户仍可配完全自定义值改写。
+		// UserAgent исходящий User-Agent Явное перекрытие (при непустом значении действует полный путь, приоритет над трёхсегментным дефолтом).
+		// Применяется ко всем исходящим запросам:chat/refresh/checkin/balance/report/travel/FetchModels。
+		// Значение по умолчанию выровнено с официальным WorkBuddy десктопный вид (трехсекционный), пользователь может переопределить полностью кастомным значением.
 		UserAgent string `json:"user_agent"`
-		// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` 与归属头
-		// X-IDE-Version）。空 = 内置默认（对齐官方 5.5.4 分发包）。
+		// ClientVersion WorkBuddy Сегмент версии клиента (исходящий UA `WorkBuddy/<ver>` и заголовок принадлежности
+		// X-IDE-Version）。пустой = Встроено по умолчанию (выравнивание с официальным 5.5.4 дистрибутив).
 		ClientVersion string `json:"client_version"`
-		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认（官方内置 CLI 2.137.1）。
+		// CliVersion исходящий UA Средний `CLI/<ver>` версия сегмента. Пусто = встроенный дефолт (официальный встроенный CLI 2.137.1）。
 		CliVersion string `json:"cli_version"`
-		// ClientName 用量归属头取值（X-Product / X-IDE-Name / X-IDE-Type / X-IDE-Version）。
-		// 空 = 旧行为 X-Product="SaaS" 不设 X-IDE-*；配 "WorkBuddy" 则四头跟随。
+		// ClientName значение заголовка принадлежности расхода (X-Product / X-IDE-Name / X-IDE-Type / X-IDE-Version）。
+		// пустой = Старое поведение X-Product="SaaS« Не задано X-IDE-*；Сопоставить "WorkBuddy" то следуют все четыре заголовка.
 		ClientName string `json:"client_name"`
-		// DeviceToken 设备风控 Token（X-Device-Token 头）全局兜底；空 = 不注入。
-		// 每号 auth 文件的 device_token 键优先于本项。
+		// DeviceToken Риск-контроль устройства Token（X-Device-Token заголовок) глобальный fallback; пусто = Не инжектировать.
+		// На каждый номер auth файла device_token ключ приоритетнее данного поля.
 		DeviceToken string `json:"device_token"`
-		// DeviceTokenFile device token 文件路径兜底（宿主落盘的桌面端 token，5 分钟读取缓存）。
+		// DeviceTokenFile device token Фолбэк пути к файлу (десктоп хоста с сохранением на диск token，5 минут читать кэш).
 		DeviceTokenFile string `json:"device_token_file"`
-		// PassthroughIP 是否透传客户端 IP 给上游（默认 false，反代安全边界）。
+		// PassthroughIP прозрачно прокидывать клиента IP в апстрим (по умолчанию false，граница безопасности обратного прокси).
 		PassthroughIP bool `json:"passthrough_ip"`
 	} `json:"upstream"`
 
 	Features struct {
-		// SanitizeBlacklistFingerprints 出站请求体黑名单指纹脱敏（默认 true；false 完全还原）。
+		// SanitizeBlacklistFingerprints Десенситизация отпечатка блеклиста тела исходящего запроса (по умолчанию true；false полное восстановление).
 		SanitizeBlacklistFingerprints bool `json:"sanitize_blacklist_fingerprints"`
 	} `json:"features"`
 
 	Prompt struct {
-		// Mode passthrough（默认）= 透传客户端原始 system（降级重试仍会切到 Degraded）；
-		// custom = 网关用自有系统提示词替换客户端 system/developer；
-		// append = 两者并用：开头连续 system/developer 块后插网关 system，既有消息逐字不动（issue #129）。
+		// Mode passthrough（по умолчанию)= прозрачная передача оригинала клиента system（фолбэк-ретрай всё равно переключится на Degraded）；
+		// custom = Шлюз заменяет клиентский системный промпт своим system/developer；
+		// append = Совместное использование: непрерывность в начале system/developer после блока вставить шлюз system，Существующие сообщения дословно без изменений (issue #129）。
 		Mode string `json:"mode"` // "passthrough" / "custom" / "append"
-		// File 提示词文件路径；空 = 内置默认 defaultprompt.md；
-		// 路径非空但不可读 → 启动报错（fail fast，避免静默回落到内置默认）。
+		// File Путь к файлу промпта; пусто = встроенный по умолчанию defaultprompt.md；
+		// Путь непустой, но нечитаем → Ошибка запуска (fail fast，избежать тихого отката к встроенному дефолту).
 		File string `json:"file"`
 	} `json:"prompt"`
 
-	// PromptText 解析后的系统提示词文本（custom/append 模式使用）。
+	// PromptText Текст системного промпта после парсинга (custom/append использование режима).
 	PromptText string `json:"-"`
 
 	Upstash struct {
-		URL   string `json:"url"`   // 空 = 纯内存模式；支持完整 rediss:// URL 或 https://xxx.upstash.io host
-		Token string `json:"token"` // url 非完整连接串时用于组装 rediss://default:<token>@<host>:6379
+		URL string `json:"url"` // пустой = Чисто in-memory режим; поддержка полная rediss:// URL Или https://xxx.upstash.io host
+		Token string `json:"token"` // url используется для сборки при неполной строке подключения rediss://default:<token>@<host>:6379
 	} `json:"upstash"`
 
 	Pool struct {
-		MaxInFlight        int    `json:"max_in_flight"`        // 单账号最大在途请求数，0 = 不限
-		MaxInFlightGlobal  int    `json:"max_in_flight_global"` // global 域单账号在途上限（WAF 风控紧域压低并发），0 = 回落默认 2
-		BreakerThreshold   int    `json:"breaker_threshold"`    // 连续失败次数触发熔断，默认 3
-		BreakerCooldown    string `json:"breaker_cooldown"`     // 基础熔断时长，默认 "30m"
-		BreakerCooldownMax string `json:"breaker_cooldown_max"` // 指数退避封顶，默认 "6h"
-		// 连败降权（issue #114）：ErrClient/传输层这类「不罚号」失败连续计数，达阈
-		// 临时出池。与冷却/熔断并存取更长者不叠加。默认 5 次 / 10m。
-		DegradeThreshold   int     `json:"degrade_threshold"`    // 连败次数触发降权，默认 5
-		DegradeCooldown    string  `json:"degrade_cooldown"`     // 降权时长（固定，非指数退避），默认 "10m"
-		DegradeCooldownMax string  `json:"degrade_cooldown_max"` // 降权时长的上限钳制，默认 "2h"（仅当 cooldown 超该值才钳制）
-		IdleWeightPerHour  float64 `json:"idle_weight_per_hour"` // 闲置补偿：每小时未用 +0.5 权重
-		IdleWeightMax      float64 `json:"idle_weight_max"`      // 闲置补偿封顶，默认 5.0
-		// PreferExpiring 最早到期优先路由开关，默认 true。开启且 expiring_soon 窗口内
-		// 存在有效批次时，按最早到期时间排序；关闭后完全不使用到期信息选号。
+		MaxInFlight int `json:"max_in_flight"` // макс. кол-во запросов в полёте на аккаунт,0 = без ограничений
+		MaxInFlightGlobal int `json:"max_in_flight_global"` // global Лимит in-flight на аккаунт в домене (WAF в строгой зоне риск-контроля concurrency снижается),0 = откат к дефолту 2
+		BreakerThreshold int `json:"breaker_threshold"` // Превышение числа последовательных ошибок вызывает circuit breaker, по умолчанию 3
+		BreakerCooldown string `json:"breaker_cooldown"` // Базовая длительность circuit breaker, по умолчанию »30m"
+		BreakerCooldownMax string `json:"breaker_cooldown_max"` // Потолок экспоненциального бэкоффа, по умолчанию »6h"
+		// понижение веса при серии поражений (issue #114）：ErrClient/Последовательный счётчик сбоев транспортного уровня типа "без штрафа аккаунту», при достижении порога
+		// Временное исключение из пула. С охлаждением/circuit breaker сосуществуют, берётся больший без суммирования. По умолчанию 5 Раз / 10m。
+		DegradeThreshold int `json:"degrade_threshold"` // число подряд идущих неудач триггерит понижение приоритета, по умолчанию 5
+		DegradeCooldown string `json:"degrade_cooldown"` // Длительность понижения приоритета (фикс., без эксп. бэкоффа), по умолч. "10m"
+		DegradeCooldownMax string `json:"degrade_cooldown_max"` // Ограничение сверху длительности понижения приоритета, по умолчанию "2h"（только если cooldown кламп только при превышении этого значения)
+		IdleWeightPerHour float64 `json:"idle_weight_per_hour"` // компенсация простоя: неиспользовано за час +0.5 Вес
+		IdleWeightMax float64 `json:"idle_weight_max"` // потолок компенсации простоя, по умолчанию 5.0
+		// PreferExpiring Переключатель маршрутизации "сначала истекающие», по умолчанию true。Включено и expiring_soon Внутри окна
+		// при наличии валидных батчей — сортировка по ближайшему сроку истечения; при выключении данные о сроке для выбора номера не используются.
 		PreferExpiring bool `json:"prefer_expiring"`
-		// ExpiringSoon 快过期积分窗口（如 "168h"=7天）：签到/余额刷新时，到期时间在
-		// 此窗口内的积分进入优先集，再按最早到期排序。空/0 = 禁用该路由门槛。
+		// ExpiringSoon Окно скоро истекающих баллов (напр., "168h"=7дн.): чекин/при обновлении баланса время истечения в
+		// Баллы в этом окне попадают в приоритетный набор, далее сортировка по ближайшему сроку истечения. Пусто/0 = Отключить порог этого маршрута.
 		ExpiringSoon string `json:"expiring_soon"`
-		// CostExploreInterval costTier 条件探索窗口（issue #136 方案 a′）：tier 0
-		// 垄断层存在且 tier 1 有成员时，距上次探索 ≥ 窗口则本次 pick 生效层切
-		// tier 1-only（探索=搭车改道，零新增上游请求；成功即毕业，失败走既有
-		// 错误策略）。默认 "30m"（≤48 次/天/模型）；"0" 关停（完全回到现状行为）；
-		// 空值回落默认。
+		// CostExploreInterval costTier Окно исследования условий (issue #136 схема a′）：tier 0
+		// Монопольный слой существует и tier 1 При наличии участников, время с последней разведки ≥ окно, то в этот раз pick Переключение слоя применения
+		// tier 1-only（Исследование=Попутное перенаправление, ноль новых upstream-запросов; успех — выпуск, неудача — по существующему
+		// стратегия ошибок). По умолчанию "30m«（≤48 Раз/день/модель);«0" Отключение (полный возврат к текущему поведению);
+		// Пустое значение откатывается к дефолту.
 		CostExploreInterval string `json:"cost_explore_interval"`
-		// CreditFloor 积分保底：账号余额低于该值时，对实测收费模型（tier 2）不再
-		// 参与选号——防止收费请求把余额打穿、连免费模型都 402 冷却到次日签到。
-		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
-		// 默认 0 = 关闭；负值钳 0。
+		// CreditFloor Гарантированный минимум баллов: если баланс аккаунта ниже этого значения, для моделей с фактической оплатой (tier 2）Больше не
+		// Участвует в выборе номера — защита от пробития баланса платными запросами, чтобы не задеть даже бесплатные модели 402 Кулдаун до чекина следующего дня.
+		// tier 0（бесплатно)/ tier 1（без наблюдений) не ограничивается; восстановление чекином превышает floor Автовосстановление.
+		// По умолчанию 0 = Отключено; отрицательные значения клампятся 0。
 		CreditFloor int64 `json:"credit_floor"`
 	} `json:"pool"`
 
 	SessionSticky struct {
-		Enabled    bool   `json:"enabled"`     // 默认 true
-		TTL        string `json:"ttl"`         // 会话绑定 TTL，默认 "30m"
-		GCInterval string `json:"gc_interval"` // 会话 GC 周期，默认 "5m"
+		Enabled bool `json:"enabled"` // По умолчанию true
+		TTL string `json:"ttl"` // привязка сессии TTL，По умолчанию »30m"
+		GCInterval string `json:"gc_interval"` // сессия GC период, по умолчанию »5m"
 	} `json:"session_sticky"`
 
-	// 解析后
-	SoftRateDur            time.Duration `json:"-"`
-	SoftRateMaxDur         time.Duration `json:"-"`
-	BreakerCooldownDur     time.Duration `json:"-"`
-	BreakerCooldownMaxD    time.Duration `json:"-"`
-	DegradeCooldownDur     time.Duration `json:"-"`
-	DegradeCooldownMaxD    time.Duration `json:"-"`
-	SessionTTL             time.Duration `json:"-"`
-	SessionGCInterval      time.Duration `json:"-"`
-	BalanceRefreshInterval time.Duration `json:"-"` // 0 = 不启动（enabled=false）
-	ExpiringSoonDur        time.Duration `json:"-"`
-	// CostExploreIntervalDur 解析后的 costTier 探索窗口（issue #136）；0 = 关停。
+	// После парсинга
+	SoftRateDur time.Duration `json:"-"`
+	SoftRateMaxDur time.Duration `json:"-"`
+	BreakerCooldownDur time.Duration `json:"-"`
+	BreakerCooldownMaxD time.Duration `json:"-"`
+	DegradeCooldownDur time.Duration `json:"-"`
+	DegradeCooldownMaxD time.Duration `json:"-"`
+	SessionTTL time.Duration `json:"-"`
+	SessionGCInterval time.Duration `json:"-"`
+	BalanceRefreshInterval time.Duration `json:"-"` // 0 = Не запускать (enabled=false）
+	ExpiringSoonDur time.Duration `json:"-"`
+	// CostExploreIntervalDur После парсинга costTier Окно исследования (issue #136）；0 = Отключение.
 	CostExploreIntervalDur time.Duration `json:"-"`
 }
 
-// Default 默认配置。
+// Default конфигурация по умолчанию.
 func Default() *Config {
 	c := &Config{
-		Listen:    ":7863",
-		APIKey:    "",
-		AuthDir:   "./auths",
+		Listen: ":7863",
+		APIKey: "",
+		AuthDir: "./auths",
 		StateFile: "./data/state.json",
 	}
 	c.Cooldown.SoftRate = "600s"
@@ -214,8 +214,8 @@ func Default() *Config {
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
-	// 缺省 true 靠显式赋值实现（同 Schedule 开关）：JSON 里键缺席时字段保留此值，
-	// 只有显式 false 才关闭来源记录。
+	// по умолчанию true реализуется явным присваиванием (тот же Schedule переключатель):JSON при отсутствии ключа в поле сохраняется это значение,
+	// Только явно false только тогда закрывать запись источника.
 	c.Logging.RequestClientInfo = true
 	c.Schedule.CheckinHours = []int{9, 21}
 	c.Schedule.TravelHours = []int{9, 21}
@@ -223,8 +223,8 @@ func Default() *Config {
 	c.Schedule.KeepaliveHours = []int{22}
 	c.Schedule.BlackcatHours = []int{23}
 	c.Schedule.GrowthHours = []int{1}
-	// 开关「缺省 true」靠这几行实现：Load 先取 Default() 再 json.Unmarshal 覆盖，
-	// 键缺席（或为 null）时字段原样保留 true，只有显式 false 才关。
+	// Переключатель "по умолчанию true」Реализуется этими строками:Load Сначала взять Default() Повторно json.Unmarshal перекрытие,
+	// Ключ отсутствует (или равен null）поле сохраняется как есть при true，Только явно false Только тогда закрывается.
 	c.Schedule.CheckinEnabled = true
 	c.Schedule.GrowthEnabled = true
 	c.Schedule.TravelEnabled = true
@@ -234,18 +234,18 @@ func Default() *Config {
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5
 	c.Upstream.TimeoutSeconds = 120
-	// HeaderTimeoutSeconds/IdleTimeoutSeconds 默认 0（未设置态），回落见 normalize()。
+	// HeaderTimeoutSeconds/IdleTimeoutSeconds По умолчанию 0（состояние "не задано»), fallback см. normalize()。
 	c.Upstream.HeaderTimeoutSeconds = 0
 	c.Upstream.IdleTimeoutSeconds = 0
-	// Global.Enabled 缺省 true（纯 CN 行为不变：CN 账号恒判 cn，global base 不被使用）；
-	// ChatBase/BillingBase 缺省空（回落内置默认）。
+	// Global.Enabled по умолчанию true（Чистый CN Поведение без изменений:CN аккаунт всегда считается cn，global base не используется);
+	// ChatBase/BillingBase по умолчанию пусто (фолбэк на встроенное значение).
 	c.Global.Enabled = true
 	c.Features.SanitizeBlacklistFingerprints = true
-	c.Prompt.Mode = "passthrough" // 缺省 passthrough：透传客户端原始 system（对齐上游；custom 由用户显式选择）
+	c.Prompt.Mode = "passthrough" // по умолчанию passthrough：прозрачная передача оригинала клиента system（Синхронизировать с апстримом;custom выбирается пользователем явно)
 	c.Pool.MaxInFlight = 3
-	// MaxInFlightGlobal 缺省 2：global 域 WAF 风控更紧，压低单号并发（WAF 403 修复
-	// P1-1）；0/负数 normalize 回落默认（与 max_in_flight 的 0=不限语义不同，分档键
-	// 的 0 没有合理语义，回退分档默认最稳）。
+	// MaxInFlightGlobal по умолчанию 2：global Домен WAF более строгий риск-контроль, снижает конкурентность на один номер (WAF 403 исправление
+	// P1-1）；0/Отрицательное число normalize откат к дефолту (с max_in_flight 0=семантика безлимита иная, ключ тарификации
+	// 0 нет осмысленной семантики, откат к градации по умолчанию — самый стабильный).
 	c.Pool.MaxInFlightGlobal = 2
 	c.Pool.BreakerThreshold = 3
 	c.Pool.BreakerCooldown = "30m"
@@ -256,8 +256,8 @@ func Default() *Config {
 	c.Pool.IdleWeightPerHour = 0.5
 	c.Pool.IdleWeightMax = 5.0
 	c.Pool.PreferExpiring = true
-	c.Pool.ExpiringSoon = "168h" // 快过期窗口默认 7 天：官方活动奖励积分多在两周内过期
-	// costTier 探索默认 30m（issue #136：垄断破除 + 搭车改道零新增请求）；"0" 关停。
+	c.Pool.ExpiringSoon = "168h" // Окно скорой экспирации по умолчанию 7 дн.: бонусные баллы официальных акций обычно истекают в течение двух недель
+	// costTier Значение по умолчанию для explore 30m（issue #136：устранение монополии + попутное перенаправление без новых запросов);«0« Отключение.
 	c.Pool.CostExploreInterval = "30m"
 	c.SessionSticky.Enabled = true
 	c.SessionSticky.TTL = "30m"
@@ -265,16 +265,16 @@ func Default() *Config {
 	return c
 }
 
-// Load 从文件读，再用 WB2A_* env 覆盖。
+// Load Читать из файла, затем использовать WB2A_* env перезапись.
 func Load(path string) (*Config, error) {
 	c := Default()
 	if path != "" {
-		// 目录检查：Docker bind mount 在宿主机文件缺失时会静默创建同名目录，
-		// 直接 ReadFile 会报 "Incorrect function" 之类晦涩错误，这里给出可操作提示。
+		// Проверка каталога:Docker bind mount при отсутствии файла на хосте тихо создаётся одноимённый каталог,
+		// прямо ReadFile будет ошибка "Incorrect function« и подобные неясные ошибки — здесь actionable подсказки.
 		if st, statErr := os.Stat(path); statErr == nil && st.IsDir() {
-			return nil, fmt.Errorf("config %s 是目录而非文件——"+
-				"Docker 部署时若宿主机缺少 config.json，bind mount 会创建同名目录。"+
-				"请先 `cp config.example.json config.json` 或删除该目录（程序会自动生成配置）", path)
+			return nil, fmt.Errorf("config %s — это директория, а не файл —"+
+				"Docker если при деплое на хосте отсутствует config.json，bind mount Будет создан каталог с тем же именем."+
+				"сначала `cp config.example.json config.json` или удалите каталог (программа автоматически сгенерирует конфигурацию)", path)
 		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -291,8 +291,8 @@ func Load(path string) (*Config, error) {
 	return c, nil
 }
 
-// ParseConfigInto 把 JSON 覆盖到 c 上并 normalize（不做 env、不读文件）。
-// 面板保存配置走这条路径：与 Load 完全同一套解析/校验逻辑，避免两处漂移。
+// ParseConfigInto взять JSON Перекрывает до c на и normalize（Не делать env、файл не читается).
+// Сохранение конфигурации панели идёт по этому пути: с Load полностью тот же парсинг/Логика валидации, избегать расхождения в двух местах.
 func ParseConfigInto(raw []byte, c *Config) (*Config, error) {
 	if err := json.Unmarshal(raw, c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -303,15 +303,15 @@ func ParseConfigInto(raw []byte, c *Config) (*Config, error) {
 	return c, nil
 }
 
-// ParseConfig 基于默认值解析一段配置 JSON（等价于 Load 的文件分支，但不读环境变量）。
+// ParseConfig разбор секции конфига на основе значений по умолчанию JSON（Эквивалентно Load ветка файла, но без чтения переменных окружения).
 func ParseConfig(raw []byte) (*Config, error) {
 	return ParseConfigInto(raw, Default())
 }
 
-// WriteDefault 在 path 落一份推荐配置（首次运行自动生成，双击即开免手工复制样例）。
-// 值取自 Default()（含超时/熔断/签到排程等推荐值），api_key 用 crypto/rand 随机生成：
-// 安全默认优于示例占位符（listen 绑定 0.0.0.0，空 key 会把网关裸暴露给局域网）。
-// 返回生成的 key 供启动日志透出。已存在时经 O_EXCL 原子拒绝，绝不改写用户配置。
+// WriteDefault В path Сгенерировать рекомендуемую конфигурацию (автосоздание при первом запуске, открывается двойным кликом без ручного копирования примера).
+// значение берется из Default()（включая таймаут/Circuit Breaker/расписание чекинов и др. рекомендуемые значения),api_key использовать crypto/rand Случайная генерация:
+// Безопасный дефолт приоритетнее примера-плейсхолдера (listen Привязка 0.0.0.0，пустой key приведёт к прямому экспонированию шлюза в LAN).
+// Вернуть сгенерированный key для вывода в стартовый лог. При наличии через O_EXCL Атомарный отказ, конфигурация пользователя не перезаписывается.
 func WriteDefault(path string) (string, error) {
 	raw := make([]byte, 18)
 	if _, err := rand.Read(raw); err != nil {
@@ -320,8 +320,8 @@ func WriteDefault(path string) (string, error) {
 	key := "sk-" + base64.RawURLEncoding.EncodeToString(raw)
 	c := Default()
 	c.APIKey = key
-	_ = c.normalize() // Default() 全合法，normalize 仅补齐 header/idle 超时的展示值
-	out, err := json.MarshalIndent(c, "", "  ")
+	_ = c.normalize() // Default() полностью валидно,normalize Только дополнение header/idle Отображаемое значение тайм-аута
+	out, err := json.MarshalIndent(c, "", " ")
 	if err != nil {
 		return "", fmt.Errorf("marshal config: %w", err)
 	}
@@ -330,7 +330,7 @@ func WriteDefault(path string) (string, error) {
 			return "", fmt.Errorf("mkdir config dir: %w", err)
 		}
 	}
-	// O_EXCL 原子拒绝覆盖：即使调用方漏判"不存在"，也绝不悄悄改写用户已有配置。
+	// O_EXCL атомарный запрет перезаписи: даже если вызывающая сторона пропустила проверку"не существует"，и никогда скрытно не перезаписывать существующую конфигурацию пользователя.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("write config: %w", err)
@@ -434,7 +434,7 @@ func (c *Config) normalize() error {
 	if c.SoftRateDur, err = time.ParseDuration(c.Cooldown.SoftRate); err != nil {
 		return fmt.Errorf("cooldown.soft_rate: %w", err)
 	}
-	// 空值回落默认 2h（Default() 已置值；此兜底覆盖显式 "" 与 Default() 被绕过的场景）。
+	// При пустом значении — fallback по умолчанию 2h（Default() значение уже установлено; этот fallback перекрывает явный "" и Default() сценарий обхода).
 	if c.Cooldown.SoftRateMax == "" {
 		c.Cooldown.SoftRateMax = "2h"
 	}
@@ -459,7 +459,7 @@ func (c *Config) normalize() error {
 	if c.SessionGCInterval, err = time.ParseDuration(c.SessionSticky.GCInterval); err != nil {
 		return fmt.Errorf("session_sticky.gc_interval: %w", err)
 	}
-	// 快过期窗口：空 = 禁用（ExpiringSoonDur 0）；非空必须可解析（拼写错误 fail fast）。
+	// окно скорого истечения: пусто = отключено (ExpiringSoonDur 0）；Непустое должно быть парсируемым (опечатка fail fast）。
 	if c.Pool.ExpiringSoon != "" {
 		if c.ExpiringSoonDur, err = time.ParseDuration(c.Pool.ExpiringSoon); err != nil {
 			return fmt.Errorf("pool.expiring_soon: %w", err)
@@ -469,9 +469,9 @@ func (c *Config) normalize() error {
 		c.ExpiringSoonDur = 0
 		c.Pool.ExpiringSoon = "0"
 	}
-	// costTier 探索窗口（issue #136）：空值回落默认 30m（Default 已置；此兜底覆盖
-	// 显式 ""）；"0" 是合法值（关停，完全回到现状行为），不回落；负值钳 0 同关停
-	//（"−5m" 无合理语义）。
+	// costTier Окно исследования (issue #136）：При пустом значении — fallback по умолчанию 30m（Default уже установлено; этот fallback покрывает
+	// Явно ""）；«0" — валидное значение (отключение, полный возврат к текущему поведению), без отката; отрицательные clamp 0 аналогично отключению
+	//（"−5m" без осмысленной семантики).
 	if c.Pool.CostExploreInterval == "" {
 		c.Pool.CostExploreInterval = "30m"
 	}
@@ -481,14 +481,14 @@ func (c *Config) normalize() error {
 	if c.CostExploreIntervalDur < 0 {
 		c.CostExploreIntervalDur = 0
 	}
-	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
+	// Гарантия баллов: отрицательные clamp 0（= закрытие).0 — валидный дефолт (выкл.), фолбэк на null не требуется.
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3
 	}
-	// 连败降权参数缺省归一（非法/未设置回落默认，与 breaker_threshold 同风格）。
+	// параметры понижения веса при серии поражений по умолчанию нормализуются к единице (невалидный/не задано — откат к значению по умолчанию, и breaker_threshold В том же стиле).
 	if c.Pool.DegradeThreshold <= 0 {
 		c.Pool.DegradeThreshold = 5
 	}
@@ -498,7 +498,7 @@ func (c *Config) normalize() error {
 	if c.Pool.DegradeCooldownMax == "" {
 		c.Pool.DegradeCooldownMax = "2h"
 	}
-	// global 在途分档：0/负数视为未设置回落默认 2（WAF 403 修复 P1-1）。
+	// global in-flight по уровням:0/Отрицательное считается как не задано, фолбэк к дефолту 2（WAF 403 исправление P1-1）。
 	if c.Pool.MaxInFlightGlobal <= 0 {
 		c.Pool.MaxInFlightGlobal = 2
 	}
@@ -511,8 +511,8 @@ func (c *Config) normalize() error {
 	if c.Upstream.TimeoutSeconds <= 0 {
 		c.Upstream.TimeoutSeconds = 120
 	}
-	// header 缺省回落 timeout（保"首字节前换号"既有语义）；idle 缺省走内置大值。
-	// 任务书约定：0 一律视为"未设置"走默认，真正的"禁用"留待后续（避免歧义）。
+	// header дефолтный fallback timeout（сохранить"смена номера до первого байта"сохр. прежнюю семантику);idle По умолчанию большое встроенное значение.
+	// ТЗ предусматривает:0 во всех случаях считается как"не задано«идёт по умолчанию, реальный«Отключено"Отложить на потом (во избежание неоднозначности).
 	if c.Upstream.HeaderTimeoutSeconds <= 0 {
 		c.Upstream.HeaderTimeoutSeconds = c.Upstream.TimeoutSeconds
 	}
@@ -522,8 +522,8 @@ func (c *Config) normalize() error {
 	if !strings.HasPrefix(c.Listen, ":") && !strings.Contains(c.Listen, ":") {
 		c.Listen = ":" + c.Listen
 	}
-	// 空数组与 null 反序列化后覆盖掉 Default() 的排程值（键缺席才保留），在此补齐。
-	// 空 = 未配置 → 回落默认；「禁用」一律走 *_enabled=false，两者互不混淆。
+	// Пустой массив и null перекрыть после десериализации Default() значение расписания (сохраняется только при отсутствии ключа), здесь дополнить.
+	// пустой = Не настроено → Откат к дефолту; "Отключено» всегда через *_enabled=false，не путать между собой.
 	if len(c.Schedule.CheckinHours) == 0 {
 		c.Schedule.CheckinHours = []int{9, 21}
 	}
@@ -542,7 +542,7 @@ func (c *Config) normalize() error {
 	if len(c.Schedule.GrowthHours) == 0 {
 		c.Schedule.GrowthHours = []int{1}
 	}
-	// 余额后台刷新：启用时 minutes<=0 回落默认 5；关闭时 interval 保持 0（不启动）。
+	// Фоновое обновление баланса: при включении minutes<=0 откат к дефолту 5；При закрытии interval Сохранить 0（не запускать).
 	if c.Schedule.BalanceRefreshEnabled {
 		if c.Schedule.BalanceRefreshMinutes <= 0 {
 			c.Schedule.BalanceRefreshMinutes = 5
@@ -555,12 +555,12 @@ func (c *Config) normalize() error {
 	return c.normalizePrompt()
 }
 
-// normalizePrompt 校验 prompt.mode 并按 file 加载提示词文本（custom/append 模式）。
+// normalizePrompt Валидация prompt.mode и по file Загрузка текста промпта (custom/append режим).
 //
-// mode 非法（非 passthrough/custom/append）启动报错，避免静默回落到某一分支；
-// custom/append 模式下 file 非空但不可读 → 报错（fail fast），file 空 → 用内置默认
-// （两模式共用同一加载路径，PromptText 均非空）。
-// passthrough 模式不加载文本（透传客户端原始 system，文本在降级时用 prompt.Degraded）。
+// mode Невалидный (не passthrough/custom/append）Ошибка запуска, избегать тихого отката к ветке;
+// custom/append В режиме file непусто, но нечитаемо → ошибка (fail fast），file пустой → использовать встроенный дефолт
+// （Два режима используют один путь загрузки,PromptText оба непустые).
+// passthrough Режим не загружает текст (прозрачная передача оригинала клиента system，Текст для деградации prompt.Degraded）。
 func (c *Config) normalizePrompt() error {
 	switch m := strings.ToLower(strings.TrimSpace(c.Prompt.Mode)); m {
 	case "", "passthrough":
@@ -570,7 +570,7 @@ func (c *Config) normalizePrompt() error {
 	case "append":
 		c.Prompt.Mode = "append"
 	default:
-		return fmt.Errorf("prompt.mode: %q 不是合法值（passthrough / custom / append）", c.Prompt.Mode)
+		return fmt.Errorf("prompt.mode: %q не является допустимым значением (passthrough / custom / append）", c.Prompt.Mode)
 	}
 	if c.Prompt.Mode == "custom" || c.Prompt.Mode == "append" {
 		text, err := prompt.Load(c.Prompt.Mode, c.Prompt.File)
@@ -582,11 +582,11 @@ func (c *Config) normalizePrompt() error {
 	return nil
 }
 
-// validateScheduleHours 校验排程小时落在 0-23。
+// validateScheduleHours проверить, что час по расписанию попадает в 0-23。
 //
-// 为什么不用 `[-1]` 之类的哨兵值表意"禁用"：非法小时被静默吞掉时，用户以为关掉了签到，
-// 实际可能被当成另一个整点照常执行；这里直接快速失败，并在错误信息里指向正确的开关
-// （checkin_enabled / keepalive_enabled），避免用户靠猜哨兵值来配。
+// почему не использовать `[-1]` смысл sentinel-значений вроде«Отключено«：невалидный час тихо проглатывается, пользователь думает, что отключил чекин,
+// фактически может быть воспринято как штатное выполнение в другой ровный час; здесь сразу fast-fail с указанием правильного переключателя в сообщении об ошибке
+// （checkin_enabled / keepalive_enabled），исключить подбор пользователем значения сентинела наугад.
 func (c *Config) validateScheduleHours() error {
 	if err := checkHourRange("schedule.checkin_hours", "checkin_enabled", c.Schedule.CheckinHours); err != nil {
 		return err
@@ -609,7 +609,7 @@ func (c *Config) validateScheduleHours() error {
 func checkHourRange(field, switchKey string, hours []int) error {
 	for _, h := range hours {
 		if h < 0 || h > 23 {
-			return fmt.Errorf("%s: %d 不是合法小时（0-23）；如要关闭该任务请设 schedule.%s=false", field, h, switchKey)
+			return fmt.Errorf("%s: %d не валидный час (0-23）；Чтобы отключить задачу, установите schedule.%s=false", field, h, switchKey)
 		}
 	}
 	return nil

@@ -61,8 +61,8 @@ func TestSaveAtomicRoundtrip(t *testing.T) {
 	}
 }
 
-// TestLoadDirLoadsAllValid 不再按 region 过滤：所有可解析的 auth 文件都被加载，
-// 解析失败的文件静默跳过。
+// TestLoadDirLoadsAllValid Больше не по region Фильтр: все парсируемые auth все файлы загружены,
+// Файлы с ошибкой парсинга тихо пропускаются.
 func TestLoadDirLoadsAllValid(t *testing.T) {
 	dir := t.TempDir()
 	cn := `{"auth":{"accessToken":"at1","refreshToken":"r","expiresAt":1,"domain":""},"account":{"uid":"cn1"}}`
@@ -97,7 +97,7 @@ func TestNeedsRefresh(t *testing.T) {
 	}
 }
 
-// TestParseDeviceToken 嵌套形与扁平形 auth 文件的顶层 device_token 键均被解析。
+// TestParseDeviceToken Вложенная и плоская формы auth верхний уровень файла device_token ключи разобраны.
 func TestParseDeviceToken(t *testing.T) {
 	nested := []byte(`{"auth":{"accessToken":"at","refreshToken":"rt","expiresAt":1,"domain":""},"account":{"uid":"u1"},"device_token":"dev-tok-nested"}`)
 	sa, err := Parse(nested)
@@ -118,7 +118,7 @@ func TestParseDeviceToken(t *testing.T) {
 	}
 }
 
-// TestSaveAtomicPreservesDeviceToken SaveAtomic 写回后顶层 device_token 被保留并重新解析回来。
+// TestSaveAtomicPreservesDeviceToken SaveAtomic После записи верхний уровень device_token Сохранено и распарсено обратно.
 func TestSaveAtomicPreservesDeviceToken(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "workbuddy-dt.json")
@@ -140,15 +140,15 @@ func TestSaveAtomicPreservesDeviceToken(t *testing.T) {
 	}
 }
 
-// TestLoadDirBackfillsRealm 存量迁移：LoadDir 加载目录时对空 realm 的 auth 自动
-// backfill + SaveAtomic；已有 realm 的保持原值（不被 domain 覆盖）；文件全部带标识。
+// TestLoadDirBackfillsRealm Миграция существующих данных:LoadDir При загрузке каталога для пустого realm auth Авто
+// backfill + SaveAtomic；уже есть realm сохраняет исходное значение (не domain перекрытие); все файлы с меткой.
 func TestLoadDirBackfillsRealm(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fixtures := map[string]string{
 		"workbuddy-g1.json": `{"auth":{"accessToken":"at","refreshToken":"r","expiresAt":1,"domain":"www.workbuddy.ai"},"account":{"uid":"g1"}}`,
 		"workbuddy-c1.json": `{"auth":{"accessToken":"at","refreshToken":"r","expiresAt":1,"domain":""},"account":{"uid":"c1"}}`,
-		// 已有 realm 的不因 domain 变化被覆盖：global domain + 显式 cn → 保持 cn
+		// уже есть realm не из-за domain изменение перезаписано:global domain + Явно cn → Сохранить cn
 		"workbuddy-c2.json": `{"auth":{"accessToken":"at","refreshToken":"r","expiresAt":1,"domain":"www.workbuddy.ai","realm":"cn"},"account":{"uid":"c2"}}`,
 	}
 	for name, body := range fixtures {
@@ -166,11 +166,11 @@ func TestLoadDirBackfillsRealm(t *testing.T) {
 	}
 	want := map[string]string{"g1": "global", "c1": "cn", "c2": "cn"}
 	for _, a := range list {
-		// 内存态已补标识
+		// в памяти метка уже проставлена
 		if got := a.RealmStored(); got != want[a.UID] {
 			t.Errorf("uid=%s in-memory realm=%q want %q", a.UID, got, want[a.UID])
 		}
-		// 落盘文件也带 realm 键
+		// Файл на диске также содержит realm Клавиша
 		raw, err := os.ReadFile(a.FilePath)
 		if err != nil {
 			t.Fatalf("read %s: %v", a.FilePath, err)
@@ -185,9 +185,9 @@ func TestLoadDirBackfillsRealm(t *testing.T) {
 	}
 }
 
-// TestLoadDirBackfillWriteFailureDoesNotBlock 单个文件 backfill 落盘失败（tmp 预置目录
-// 使 WriteFile 失败）不阻断启动：其他文件照常迁移，LoadDir 不向上抛错。
-// （历史纯 CN auth 目录一次性迁移时，个别文件不可写不应让整个服务起不来。）
+// TestLoadDirBackfillWriteFailureDoesNotBlock Один файл backfill Ошибка записи на диск (tmp Предустановленный каталог
+// Включить WriteFile сбой) не блокирует запуск: остальные файлы мигрируются штатно,LoadDir Не пробрасывать ошибку выше.
+// （Исторически чистый CN auth при одноразовой миграции каталога отдельные незаписываемые файлы не должны валить весь сервис.)
 func TestLoadDirBackfillWriteFailureDoesNotBlock(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -195,7 +195,7 @@ func TestLoadDirBackfillWriteFailureDoesNotBlock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "workbuddy-g1.json"), []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// 预置同名 .tmp 目录 → SaveAtomic 的 os.WriteFile(".tmp") 报 is a directory。
+	// Предустановленный одноименный .tmp каталог → SaveAtomic os.WriteFile(".tmp") Отчет is a directory。
 	if err := os.Mkdir(filepath.Join(dir, "workbuddy-c1.json.tmp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestLoadDirBackfillWriteFailureDoesNotBlock(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("want 2 accounts loaded, got %d", len(list))
 	}
-	// 好文件迁移成功
+	// миграция good-файла успешна
 	raw, _ := os.ReadFile(filepath.Join(dir, "workbuddy-g1.json"))
 	b, _ := Parse(raw)
 	if b.RealmStored() != "global" {
@@ -219,13 +219,13 @@ func TestLoadDirBackfillWriteFailureDoesNotBlock(t *testing.T) {
 	}
 }
 
-// TestLoadDirDuplicateUIDWarning 同 UID 双 realm auth 文件（概率近零的 EDGE）：LoadDir
-// 检测到重复 UID 时打 WARN（含两文件路径），且不改变加载行为——后载入者胜出（返回 1 个、
-// 不 panic、realm 为后载入者值）。LoadDir 现在有额外 seenUID 副作用，逐字验证 WARN。
+// TestLoadDirDuplicateUIDWarning Совм. UID Двойной realm auth файл (с близкой к нулю вероятностью EDGE）：LoadDir
+// обнаружен дубликат UID при вызове WARN（содержит два пути к файлам), без изменения поведения загрузки — побеждает последний загруженный (возвращает 1 шт.,
+// Не panic、realm значение поздней загрузки).LoadDir Сейчас есть дополнительно seenUID побочный эффект, посимвольная верификация WARN。
 func TestLoadDirDuplicateUIDWarning(t *testing.T) {
 	dir := t.TempDir()
-	// 同一 UID u9 的两个文件：cn realm 文件按文件名排序在前（workbuddy-a-...），
-	// global realm 文件在后 → 后载入者（global）胜出。
+	// Тот же UID u9 два файла:cn realm файлы сортируются по имени вперед (workbuddy-a-...），
+	// global realm Файл после → Позже загруженный (global）Побеждает.
 	cn := `{"auth":{"accessToken":"at1","refreshToken":"r","expiresAt":1,"domain":"www.codebuddy.cn"},"account":{"uid":"u9"}}`
 	gl := `{"auth":{"accessToken":"at2","refreshToken":"r","expiresAt":1,"domain":"www.workbuddy.ai"},"account":{"uid":"u9"}}`
 	if err := os.WriteFile(filepath.Join(dir, "workbuddy-a-cn.json"), []byte(cn), 0o600); err != nil {
@@ -235,7 +235,7 @@ func TestLoadDirDuplicateUIDWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 捕获 log 输出（本测试不 t.Parallel：log.SetOutput 是进程级全局，需串行）。
+	// Захват log вывод (данный тест не t.Parallel：log.SetOutput глобально на процесс, требуется сериализация).
 	old := log.Writer()
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -251,12 +251,12 @@ func TestLoadDirDuplicateUIDWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load err=%v", err)
 	}
-	// 行为稳定（不改加载结果）：LoadDir 返回全部可解析文件（去重发生在 pool.SyncToDir
-	// 的 UID 键 upsert），不 panic。
+	// поведение стабильно (не меняет результат загрузки):LoadDir Вернуть все парсируемые файлы (дедупликация происходит в pool.SyncToDir
+	// UID Клавиша upsert），Не panic。
 	if len(list) != 2 {
 		t.Fatalf("want 2 accounts loaded (dedup later in pool), got %d", len(list))
 	}
-	// WARN 已触发且含两文件路径。
+	// WARN Уже сработало и содержит два пути к файлам.
 	if !strings.Contains(string(raw), "WARN: uid") ||
 		!strings.Contains(string(raw), "duplicated") ||
 		!strings.Contains(string(raw), "workbuddy-a-cn.json") ||

@@ -4,12 +4,12 @@ import (
 	"testing"
 )
 
-// TestLoginEndpoints realm→端点映射：global 三端点全在 workbuddy.ai 域，
-// cn/空/非法值 → copilot.tencent.com（零回归兜底）。
+// TestLoginEndpoints realm→маппинг эндпоинтов:global все три эндпоинта в workbuddy.ai домен,
+// cn/пустой/Недопустимое значение → copilot.tencent.com（нулевой регресс как фолбэк).
 func TestLoginEndpoints(t *testing.T) {
 	cases := []struct {
-		realm      string
-		wantState  string
+		realm string
+		wantState string
 		wantOrigin string
 	}{
 		{"global", "https://www.workbuddy.ai/v2/plugin/auth/state?platform=CLI", "https://www.workbuddy.ai"},
@@ -26,7 +26,7 @@ func TestLoginEndpoints(t *testing.T) {
 			if origin != c.wantOrigin {
 				t.Errorf("realm=%q origin=%q want %q", c.realm, origin, c.wantOrigin)
 			}
-			// token/account 端点必与 state 同 base。
+			// token/account Эндпоинт должен совпадать с state Совм. base。
 			if c.realm == "global" {
 				if tok[:len("https://www.workbuddy.ai")] != "https://www.workbuddy.ai" ||
 					acct[:len("https://www.workbuddy.ai")] != "https://www.workbuddy.ai" {

@@ -23,8 +23,8 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
 
-// TestMain 默认关闭聊天表格日志（chatLogEnabled=false），消除 go test 期间的 stdout 噪音。
-// 断言表格行输出的测试（logging_test.go 中的 ChatLogs/LogChatRow 系列）用 withChatLog 临时开启。
+// TestMain Лог таблицы чата по умолчанию выкл (chatLogEnabled=false），устранение go test за период stdout Шум.
+// Тест проверки вывода строк таблицы (logging_test.go в ChatLogs/LogChatRow серия) использовать withChatLog временно включено.
 func TestMain(m *testing.M) {
 	chatLogEnabled = false
 	os.Exit(m.Run())
@@ -34,8 +34,8 @@ const sseOK = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\"
 	"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1753600000,\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n" +
 	"data: [DONE]\n\n"
 
-// newFakeUpstream 返回一个 ChatStream 走 fake 的 upstream.Client。
-// fake 依据 Authorization 头决定行为。
+// newFakeUpstream Вернуть один ChatStream Ход fake upstream.Client。
+// fake На основании Authorization Заголовок определяет поведение.
 func newFakeUpstream(t *testing.T, behavior func(auth string) (status int, body string, isStream bool)) *upstream.Client {
 	t.Helper()
 	return &upstream.Client{
@@ -48,11 +48,11 @@ func newFakeUpstream(t *testing.T, behavior func(auth string) (status int, body 
 			}
 			return &http.Response{
 				StatusCode: status,
-				Header:     http.Header{"Content-Type": []string{ct}},
-				Body:       io.NopCloser(strings.NewReader(body)),
+				Header: http.Header{"Content-Type": []string{ct}},
+				Body: io.NopCloser(strings.NewReader(body)),
 			}, nil
 		})},
-		ChatBaseCN:    "https://fake.example",
+		ChatBaseCN: "https://fake.example",
 		BillingBaseCN: "https://fake.example",
 	}
 }
@@ -61,11 +61,11 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// bindStore 记录粘性绑定镜像调用（不联网），供 D4 端到端断言绑定收敛到最终成功号。
+// bindStore Запись зеркального вызова sticky-привязки (без сети), для D4 Сквозная привязка ассертов сходится к итоговому успешному аккаунту.
 type bindStore struct {
 	redisstore.Noop
-	mu     sync.Mutex
-	binds  map[string]string
+	mu sync.Mutex
+	binds map[string]string
 	delCnt int
 }
 
@@ -98,10 +98,10 @@ func (b *bindStore) lastUID(key string) (string, bool) {
 	return u, ok
 }
 
-// testPoolWith 构建一个所有账号 credits=1000 的池，并注入确定性随机源：
-// randInt64N 恒返回 0 → pickWeighted 必选候选集中积分最高者（第一个）。
-// 这让依赖"bad 先被选中"的轮转测试（如 TestChatRotatesOnHardCredit）完全确定，
-// 不再受加权随机影响而 flake。
+// testPoolWith Построить для всех аккаунтов credits=1000 пула и инжектировать детерминированный источник случайности:
+// randInt64N всегда возвращает 0 → pickWeighted кандидат с макс. баллом из обязательного набора (первый).
+// это делает зависимость"bad выбран первым"ротационный тест (напр. TestChatRotatesOnHardCredit）полностью детерминировано,
+// больше не подвержено взвешенному рандому и flake。
 func testPoolWith(auths ...*auth.Auth) *pool.Pool {
 	p := pool.New("")
 	p.SetRandomSource(func(n int64) int64 { return 0 })
@@ -112,9 +112,9 @@ func testPoolWith(auths ...*auth.Auth) *pool.Pool {
 	return p
 }
 
-// TestChatLargeBodyNoGatewayLimit 请求体无网关侧上限（max_body_mb 已移除）：
-// 数 MB 的合法 body 完整读入并照常打上游，网关不再 413（超限类问题交由上游
-// 自然响应，对齐上游 e34cfa4 规约）。
+// TestChatLargeBodyNoGatewayLimit Тело запроса без лимита на стороне шлюза (max_body_mb удалено):
+// Число MB валидный для body Полное чтение и штатный запрос к апстриму, шлюз больше не 413（Проблемы превышения лимита — на апстрим
+// Естественный ответ, выравнивание с апстримом e34cfa4 соглашение).
 func TestChatLargeBodyNoGatewayLimit(t *testing.T) {
 	var calls int
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -136,9 +136,9 @@ func TestChatLargeBodyNoGatewayLimit(t *testing.T) {
 	}
 }
 
-// TestChatBadParamsRotatesWithoutPenalty 上游 400 + Unmarshal chat params failed（11101）
-// → 该类归 ErrBadParams：不罚账号（无冷却/无禁用/无熔断计数/无 errTotal），但**仍然轮转**
-// （换号重试可能命中不同权限的账号）。端到端断言 bad 失败、good 成功、账号完好。
+// TestChatBadParamsRotatesWithoutPenalty апстрим 400 + Unmarshal chat params failed（11101）
+// → данный класс относится к ErrBadParams：аккаунт не штрафуется (без кулдауна/Нет блокировок/без учёта circuit breaker/отсутствует errTotal），Но**все равно ротируется**
+// （Ретрай со сменой аккаунта может попасть на аккаунт с другими правами). E2E-ассерты bad сбой,good успех, аккаунт цел.
 func TestChatBadParamsRotatesWithoutPenalty(t *testing.T) {
 	calls := map[string]int{}
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -163,16 +163,16 @@ func TestChatBadParamsRotatesWithoutPenalty(t *testing.T) {
 	if calls["Bearer at-bad"] != 1 || calls["Bearer at-good"] != 1 {
 		t.Errorf("calls=%v want bad/good 各 1 次", calls)
 	}
-	// 账号完好：无冷却、无禁用、无熔断计数、无 errTotal。
+	// аккаунт исправен: без cooldown, без бана, без счетчика circuit breaker, без errTotal。
 	st, _ := p.Status("bad")
 	if st.Cooling || st.Disabled || st.ErrTotal != 0 || st.BreakerFails != 0 {
 		t.Errorf("ErrBadParams must not penalize account: %+v", st)
 	}
 }
 
-// TestChatAllBadParams503CarriesUpstreamBody 全部账号都 11101 时 503 文案必须包含
-// 上游原始 11101 信息（不再是空洞的 no_healthy_account）。
-// 现状即透传 lastErr.Error()（含上游 body），本测试把它锁定为回归。
+// TestChatAllBadParams503CarriesUpstreamBody Все аккаунты 11101 Время 503 Текст должен содержать
+// Исходный upstream 11101 информация (уже не пустая no_healthy_account）。
+// текущее состояние — сквозная передача lastErr.Error()（включая апстрим body），данный тест фиксирует это как регрессию.
 func TestChatAllBadParams503CarriesUpstreamBody(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 400, `{"code":11101,"msg":"Unmarshal chat params failed with error: unexpected EOF"}`, false
@@ -198,7 +198,7 @@ func TestChatNonStreamAggregates(t *testing.T) {
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
 		Upstream: up,
 	})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[{"role":"user","content":"hi"}]}`))
@@ -236,7 +236,7 @@ func TestChatStreamPassthrough(t *testing.T) {
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
 		Upstream: up,
 	})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
@@ -279,9 +279,9 @@ func TestChatRecordsCreditForStreamAndSync(t *testing.T) {
 			})
 			rec := usage.New("")
 			h := NewHandler(Config{
-				Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+				Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
 				Upstream: up,
-				Usage:    rec,
+				Usage: rec,
 			})
 			body := `{"model":"glm-5.2","messages":[]}`
 			if stream {
@@ -317,7 +317,7 @@ func TestChatRotatesOnHardCredit(t *testing.T) {
 		&auth.Auth{UID: "bad", AccessToken: "at-bad", ExpiresAt: 9999999999},
 		&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999},
 	)
-	// 让 bad 积分更高被先选中
+	// разрешить bad Сначала выбирается с большим количеством баллов
 	p.SetCredits("bad", 2000, 0)
 	p.SetCredits("good", 1000, 0)
 	h := NewHandler(Config{Pool: p, Upstream: up, SoftCooldown: time.Minute})
@@ -343,10 +343,10 @@ func TestChatRotatesOnHardCredit(t *testing.T) {
 	}
 }
 
-// TestChatSoftCoolsOnRateLimitBody 端到端回归 issue #28：上游用非 429 状态码
-// （400 + 限流文案）表达模型侧限流时，该账号必须进入 CoolSoft 冷却，而不是只换号。
-// 修复前 Classify 归 ErrClient → applyErrorPolicy 走 default 分支只换号不罚，
-// 账号留在可用池里，下一个请求仍会被选中。
+// TestChatSoftCoolsOnRateLimitBody сквозная регрессия issue #28：Апстрим использует не 429 Код состояния
+// （400 + текст об ограничении) означает лимит на стороне модели, аккаунт должен перейти в CoolSoft кулдаун, а не просто смена номера.
+// До исправления Classify Возврат ErrClient → applyErrorPolicy Ход default ветка только меняет номер без штрафа,
+// Аккаунт остаётся в пуле доступных, следующий запрос снова его выберет.
 func TestChatSoftCoolsOnRateLimitBody(t *testing.T) {
 	calls := map[string]int{}
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -360,7 +360,7 @@ func TestChatSoftCoolsOnRateLimitBody(t *testing.T) {
 		&auth.Auth{UID: "bad", AccessToken: "at-bad", ExpiresAt: 9999999999},
 		&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999},
 	)
-	// 让 bad 积分更高被先选中（与 TestChatRotatesOnHardCredit 同一确定性手法）。
+	// разрешить bad сначала выбирается с большим количеством очков (с TestChatRotatesOnHardCredit тот же детерминированный приём).
 	p.SetCredits("bad", 2000, 0)
 	p.SetCredits("good", 1000, 0)
 	const soft = 45 * time.Second
@@ -378,12 +378,12 @@ func TestChatSoftCoolsOnRateLimitBody(t *testing.T) {
 	if !st.Cooling || st.CoolKind != "soft_rate" {
 		t.Fatalf("bad 应进入 soft_rate 冷却: %+v", st)
 	}
-	// 冷却时长取自注入的 SoftCooldown，不依赖真实等待。
+	// Длительность cooldown берется из инжектированного SoftCooldown，Без зависимости от реального ожидания.
 	if max := int64(soft / time.Second); st.CoolRemaining <= 0 || st.CoolRemaining > max {
 		t.Errorf("cool_remaining_sec=%d want in (0,%d]", st.CoolRemaining, max)
 	}
 
-	// 冷却生效：同一账号在冷却期内不得再被选中。
+	// охлаждение активно: один аккаунт нельзя выбрать повторно в период охлаждения.
 	before := calls["Bearer at-bad"]
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
@@ -391,15 +391,15 @@ func TestChatSoftCoolsOnRateLimitBody(t *testing.T) {
 		t.Fatalf("second code=%d body=%s", rec2.Code, rec2.Body)
 	}
 	if calls["Bearer at-bad"] != before {
-		t.Errorf("冷却中的账号不应再次被选中: calls=%v", calls)
+		t.Errorf("冷却中 账号不应再次被选中: calls=%v", calls)
 	}
 }
 
 func TestApplyErrorPolicySoftRateExponentialBackoff(t *testing.T) {
-	// 吸收上游语义：带解析重置时间的 body 对齐墙钟；无时间文案走有界退避，且
-	// **冷却中的重复触发不堆加**（旧「每次都翻倍」正是全池被推到 2h 封顶的元凶）。
-	// 跨冷却期的堆加语义由 pool 包 CooldownSoftRate 测试覆盖；此处锚定 handler 侧
-	// 的调用形态：连续 3 次软限流错误 → 首次 600s，后续不延长。
+	// Поглощение семантики апстрима: с распарсенным временем сброса body Синхронизация с wall-clock; без временной метки — ограниченный бэкофф, и
+	// **повторные срабатывания во время охлаждения не суммируются**（старый «удвоение каждый раз» как раз доводит весь пул до 2h виновник лимита).
+	// Семантика накопления между кулдаунами определяется pool пакет CooldownSoftRate покрытие тестами; здесь якорь handler Боковой
+	// форма вызова: подряд 3 ошибок мягкого rate-limit → Впервые 600s，далее не продлевается.
 	p := pool.New("")
 	p.Add(&auth.Auth{UID: "u1"})
 	h := NewHandler(Config{Pool: p, SoftCooldown: 600 * time.Second})
@@ -420,9 +420,9 @@ func TestApplyErrorPolicySoftRateExponentialBackoff(t *testing.T) {
 }
 
 func TestApplyErrorPolicyNotFoundUsesFixedBase(t *testing.T) {
-	// 404 分流：偶发上游 404 的冷却基数固定 60s（notFoundCooldown），不取 soft_rate
-	// 的 600s 基数，也不受其配置值影响。Cooldown 重构后 404 是固定时长冷却
-	//（不堆加、不喂熔断），成功后自然到期恢复。
+	// 404 Разделение: эпизодический апстрим 404 база кулдауна фиксирована 60s（notFoundCooldown），не брать soft_rate
+	// 600s база, также не зависит от его настроенного значения.Cooldown после рефакторинга 404 Фиксированный кулдаун
+	//（без накопления, без триггера circuit breaker), после успеха — автовосстановление по истечении.
 	p := pool.New("")
 	p.Add(&auth.Auth{UID: "u1"})
 	h := NewHandler(Config{Pool: p, SoftCooldown: 20 * time.Minute}) // soft_rate 配得很大，验证 404 不受其影响
@@ -437,7 +437,7 @@ func TestApplyErrorPolicyNotFoundUsesFixedBase(t *testing.T) {
 		if st.SoftStreak != 0 {
 			t.Errorf("call %d: 404 固定冷却不应推进 soft_streak, got %d", i, st.SoftStreak)
 		}
-		// 基数取自 notFoundCooldown（60s）而非注入的 soft_rate（20m），且重复触发不延长。
+		// База берется из notFoundCooldown（60s）а не инжектированный soft_rate（20m），повторный триггер не продлевает.
 		if st.CoolRemaining < notFoundSec-3 || st.CoolRemaining > notFoundSec {
 			t.Errorf("call %d: 404 cool_remaining_sec=%d want ~%d（固定基数 %ds，非 soft_rate）",
 				i, st.CoolRemaining, notFoundSec, notFoundSec)
@@ -445,7 +445,7 @@ func TestApplyErrorPolicyNotFoundUsesFixedBase(t *testing.T) {
 	}
 }
 
-// TestNewHandlerSoftCooldownDefault 端到端：未注入 SoftCooldown 时基数回落到 600s（原为 60s）。
+// TestNewHandlerSoftCooldownDefault end-to-end: не инжектировано SoftCooldown база откатывается к 600s（Изначально 60s）。
 func TestNewHandlerSoftCooldownDefault(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		if authz == "Bearer at-bad" {
@@ -475,19 +475,19 @@ func TestNewHandlerSoftCooldownDefault(t *testing.T) {
 	}
 }
 
-// TestChatStickyFollowsFinalSuccess 端到端验证 D4：粘性号失败换号成功后，会话绑定收敛到成功号。
+// TestChatStickyFollowsFinalSuccess E2E-верификация D4：После неудачи sticky-номера и успеха при смене номера привязка сессии сходится к успешному номеру.
 func TestChatStickyFollowsFinalSuccess(t *testing.T) {
 	st := newBindStore()
 	sess := session.New(session.Config{
-		TTL:       time.Minute,
-		Store:     st,
+		TTL: time.Minute,
+		Store: st,
 		Available: func() []string { return []string{"bad", "good"} },
 	})
 	p := testPoolWith(
 		&auth.Auth{UID: "bad", AccessToken: "at-bad", ExpiresAt: 9999999999},
 		&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999},
 	)
-	// 先把会话预绑定到 bad（模拟历史粘性），bad 失败、good 成功 → 绑定应切到 good。
+	// Предварительно привязать сессию к bad（эмуляция исторической sticky-привязки),bad сбой,good Успех → привязку переключить на good。
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		if authz == "Bearer at-bad" {
 			return 500, `{"code":500}`, false
@@ -495,12 +495,12 @@ func TestChatStickyFollowsFinalSuccess(t *testing.T) {
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
-		Pool:         p,
-		Upstream:     up,
-		Session:      sess,
+		Pool: p,
+		Upstream: up,
+		Session: sess,
 		SoftCooldown: time.Minute,
 	})
-	// 预绑定：sess.Bind("conv-1", "bad")，然后请求体带同 conversation_id。
+	// Предварительная привязка:sess.Bind("conv-1", "bad")，затем тело запроса с тем же conversation_id。
 	sess.Bind("conv-1", "bad")
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[],"metadata":{"conversation_id":"conv-1"}}`))
 	rec := httptest.NewRecorder()
@@ -508,18 +508,18 @@ func TestChatStickyFollowsFinalSuccess(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
 	}
-	// 绑定必须收敛到最终成功的 good。
+	// привязка должна сходиться к итоговому успешному good。
 	if uid, ok := st.lastUID("conv-1"); !ok || uid != "good" {
 		t.Fatalf("sticky binding should follow final success to good, got %s ok=%v (binds=%v)", uid, ok, st.binds)
 	}
 }
 
-// TestChatStickySuccessKeepsBinding 粘性号直接成功 → 绑定不变（仍为该号）。
+// TestChatStickySuccessKeepsBinding Липкий аккаунт — сразу успех → привязка неизменна (по-прежнему этот номер).
 func TestChatStickySuccessKeepsBinding(t *testing.T) {
 	st := newBindStore()
 	sess := session.New(session.Config{
-		TTL:       time.Minute,
-		Store:     st,
+		TTL: time.Minute,
+		Store: st,
 		Available: func() []string { return []string{"good"} },
 	})
 	p := testPoolWith(&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999})
@@ -539,20 +539,20 @@ func TestChatStickySuccessKeepsBinding(t *testing.T) {
 	}
 }
 
-// TestChatStickyFullFallsBackToRotation 端到端验证 C3 语义：粘性号满载不可用时，
-// 请求在同一轮内解绑并回落普通轮换选中健康账号，绑定收敛到最终成功号——而非空耗一轮。
+// TestChatStickyFullFallsBackToRotation E2E-верификация C3 Семантика: когда sticky-аккаунты переполнены и недоступны,
+// Запрос в том же раунде отвязывается и откатывается к обычной ротации с выбором здорового аккаунта, привязка сходится к итоговому успешному номеру — без холостого раунда.
 func TestChatStickyFullFallsBackToRotation(t *testing.T) {
 	st := newBindStore()
 	sess := session.New(session.Config{
-		TTL:       time.Minute,
-		Store:     st,
+		TTL: time.Minute,
+		Store: st,
 		Available: func() []string { return []string{"bad", "good"} },
 	})
 	p := testPoolWith(
 		&auth.Auth{UID: "bad", AccessToken: "at-bad", ExpiresAt: 9999999999},
 		&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999},
 	)
-	// bad 占满唯一在途名额：PickByUID 将返回 nil（healthy 但 inFlight 满）→ 解绑 + 回落轮换。
+	// bad занимает единственный in-flight слот:PickByUID Вернет nil（healthy Но inFlight заполнено)→ Отвязать + откат с ротацией.
 	p.SetMaxInFlight(1)
 	p.Acquire("bad")
 
@@ -560,9 +560,9 @@ func TestChatStickyFullFallsBackToRotation(t *testing.T) {
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
-		Pool:         p,
-		Upstream:     up,
-		Session:      sess,
+		Pool: p,
+		Upstream: up,
+		Session: sess,
 		SoftCooldown: time.Minute,
 	})
 	sess.Bind("conv-1", "bad")
@@ -572,7 +572,7 @@ func TestChatStickyFullFallsBackToRotation(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
 	}
-	// 满载粘性号被解绑，绑定收敛到最终成功号 good。
+	// Перегруженный sticky-номер отвязан, привязка сходится к итоговому успешному номеру good。
 	if uid, ok := st.lastUID("conv-1"); !ok || uid != "good" {
 		t.Fatalf("sticky binding should fall back to good, got %s ok=%v (binds=%v)", uid, ok, st.binds)
 	}
@@ -603,18 +603,18 @@ func TestChatHardCreditCooldownUntilNextDay4AM(t *testing.T) {
 	if !ok || !st.Cooling {
 		t.Fatalf("bad should be cooling: %+v ok=%v", st, ok)
 	}
-	if st.Reason != "余额不足" {
+	if st.Reason != "Недостаточно средств" {
 		t.Errorf("reason=%q", st.Reason)
 	}
-	// 硬信贷冷却必须是次日 04:00，而不是固定 12h/配置时长。
+	// Жесткий кулдаун кредита только на следующий день 04:00，а не фиксированный 12h/Настроенная длительность.
 	if st.Until.Hour() != 4 {
 		t.Errorf("until hour=%d want 4 (next-day 04:00)", st.Until.Hour())
 	}
-	// 距次日 04:00 最长 28h（凌晨 00:00~04:00 间运行时 now→次日 04:00 跨度 > 24h，属正常）。
+	// До след. дня 04:00 Максимум 28h（раннее утро 00:00~04:00 межвыполнение now→на следующий день 04:00 Диапазон > 24h，считается нормой).
 	if d := time.Until(st.Until); d <= 0 || d > 28*time.Hour {
 		t.Errorf("until %v not within (0,28h]: %v", st.Until, d)
 	}
-	// 立即换号成功：good 被选中。
+	// Мгновенная смена аккаунта успешна:good выбрано.
 	stGood, _ := p.Status("good")
 	if stGood.Cooling || stGood.Disabled {
 		t.Errorf("good should stay healthy: %+v", stGood)
@@ -644,7 +644,7 @@ func TestChat429Code14018UsesHardCreditCooldown(t *testing.T) {
 	if !ok || !st.Cooling {
 		t.Fatalf("14018 account should be cooling: %+v ok=%v", st, ok)
 	}
-	if st.Reason != "余额不足" || st.Until.Hour() != 4 {
+	if st.Reason != "Недостаточно средств" || st.Until.Hour() != 4 {
 		t.Fatalf("14018 should use hard-credit cooldown, got reason=%q until=%v", st.Reason, st.Until)
 	}
 	if got := p.Pick(); got == nil || got.UID != "good" {
@@ -652,11 +652,11 @@ func TestChat429Code14018UsesHardCreditCooldown(t *testing.T) {
 	}
 }
 
-// TestChat6004ModelResetCoolsToParsedTime 端到端回归 issue #31：上游 429 + code 6004
-// +「将在 … 重置」→ 冷却 until 精确等于解析时间（而非 600s 固定基数/指数退避），
-// 且记录触发模型 → 同模型请求仍被冷却、切模型请求按豁免可选。
+// TestChat6004ModelResetCoolsToParsedTime сквозная регрессия issue #31：апстрим 429 + code 6004
+// +「Будет … сброс»→ Охлаждение until Точно равно времени парсинга (а не 600s Фиксированная база/экспоненциальный бэкофф),
+// и логирование модели-триггера → Запросы той же модели остаются в охлаждении, запросы со сменой модели — опционально по exemption.
 func TestChat6004ModelResetCoolsToParsedTime(t *testing.T) {
-	// 用未来 5 分钟的重置时间（wall-clock）构造上游响应。
+	// Использовать future 5 минут времени сброса (wall-clock）Формирование ответа апстрима.
 	reset := time.Now().Add(5 * time.Minute)
 	ts := reset.In(upstream.SoftRateResetLoc()).Format("2006-01-02 15:04:05")
 	var calls int
@@ -673,7 +673,7 @@ func TestChat6004ModelResetCoolsToParsedTime(t *testing.T) {
 	)
 	p.SetCredits("bad", 2000, 0)
 	p.SetCredits("good", 1000, 0)
-	// 隔离对 breaker 的干扰：熔断阈值默认 3，一次失败不触发。
+	// Изоляция для breaker помехи: порог срабатывания по умолчанию 3，один фейл не триггерит.
 	h := NewHandler(Config{Pool: p, Upstream: up})
 	req := httptest.NewRequest("POST", "/v1/chat/completions",
 		strings.NewReader(`{"model":"glm-5.3","messages":[]}`))
@@ -682,7 +682,7 @@ func TestChat6004ModelResetCoolsToParsedTime(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("code=%d body=%s (want 200 after rotate to good)", rec.Code, rec.Body)
 	}
-	// bad 已进入 6004 模型级独立冷却：账号级不 cooling，台账单行 until ≈ reset。
+	// bad уже вошел 6004 Независимый кулдаун на уровне модели: на уровне аккаунта не cooling，Строка реестра until ≈ reset。
 	st, _ := p.Status("bad")
 	if st.Cooling {
 		t.Fatalf("6004-with-reset should NOT set account-level cooling: %+v", st)
@@ -693,9 +693,9 @@ func TestChat6004ModelResetCoolsToParsedTime(t *testing.T) {
 	if d := st.RateLimitedModels[0].Until.Sub(reset); d < -time.Second || d > time.Second {
 		t.Errorf("model until=%v want ~reset=%v (diff %v)", st.RateLimitedModels[0].Until, reset, d)
 	}
-	// 记录触发模型（bad 池内 private 字段需经 Status 不可见，改用行为断言）：
-	// 同模型 glm-5.3 的请求不应选中 bad（仍冷却）；
-	// 不同模型 hy3-x 的请求应豁免冷却选中 bad（最高分）。
+	// Модель-триггер записи (bad внутри пула private Поле должно пройти через Status невидимо, использовать поведенческий assert):
+	// Та же модель glm-5.3 запросы не должны выбираться bad（всё ещё в кулдауне);
+	// Разные модели hy3-x запросы должны исключаться из выбора охлаждения bad（максимальный балл).
 	p.SetRandomSource(func(n int64) int64 { return 0 })
 	same := p.PickExcludingForModel(nil, "glm-5.3")
 	if same == nil || same.UID != "good" {
@@ -707,8 +707,8 @@ func TestChat6004ModelResetCoolsToParsedTime(t *testing.T) {
 	}
 }
 
-// TestChat6004WithoutResetFallsBackToBackoff 6004 无时间文案 → 退回 600s 基数软冷却
-// （现状不变）。
+// TestChat6004WithoutResetFallsBackToBackoff 6004 без временной метки → Откатить 600s Мягкий кулдаун по кардинальности
+// （состояние без изменений).
 func TestChat6004WithoutResetFallsBackToBackoff(t *testing.T) {
 	var calls int
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -735,7 +735,7 @@ func TestChat6004WithoutResetFallsBackToBackoff(t *testing.T) {
 	if !st.Cooling || st.CoolKind != "soft_rate" {
 		t.Fatalf("bad should be soft cooling: %+v", st)
 	}
-	// 冷却时长 = 注入 soft 基数(60s)，非解析时间（无重置文案）。
+	// Длительность cooldown = инжект soft База(60s)，Вне времени парсинга (без текста сброса).
 	if st.CoolRemaining <= 0 || st.CoolRemaining > 60 {
 		t.Errorf("cool_remaining_sec=%d want ~60 (soft base, not parsed)", st.CoolRemaining)
 	}
@@ -749,7 +749,7 @@ func TestChatAllUnavailableReturns503(t *testing.T) {
 		return 402, `{"code":1,"msg":"余额不足"}`, false
 	})
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
 		Upstream: up,
 	})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`))
@@ -789,10 +789,10 @@ func TestChatTransportErrorDoesNotPenalize(t *testing.T) {
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			return nil, errors.New("connection refused")
 		})},
-		ChatBaseCN:    "https://fake.example",
+		ChatBaseCN: "https://fake.example",
 		BillingBaseCN: "https://fake.example",
 	}
-	// 传输错误不喂熔断计数：一次 transport error 不应累计 errTotal 也不应熔断。
+	// ошибки транспорта не инкрементят счётчик circuit breaker: один transport error не должно суммироваться errTotal также не должен триггерить circuit breaker.
 	h := NewHandler(Config{Pool: p, Upstream: up})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
@@ -807,7 +807,7 @@ func TestChatTransportErrorDoesNotPenalize(t *testing.T) {
 
 func TestChatHTTP5xxPenalizes(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
-	// 熔断阈值 1：一次 5xx 即触发熔断（连续失败语义并入熔断器）。
+	// Порог circuit breaker 1：Один раз 5xx сразу триггерит熔断 (семантика последовательных ошибок объединена в熔断器).
 	p.SetBreaker(1, time.Hour, time.Hour)
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 500, `{"code":500}`, false
@@ -870,14 +870,14 @@ func TestModelsEndpoint(t *testing.T) {
 }
 
 func TestModelsDynamic(t *testing.T) {
-	// 清缓存
+	// очистить кэш
 	dynamicModelsCache.Lock()
 	dynamicModelsCache.ids = nil
 	dynamicModelsCache.fetched = time.Time{}
 	dynamicModelsCache.lastFail = time.Time{}
 	dynamicModelsCache.Unlock()
 
-	// 假上游返回动态模型（含 agents + maxInputTokens/maxOutputTokens + reasoning 档位）
+	// фейковый апстрим возвращает динамическую модель (вкл. agents + maxInputTokens/maxOutputTokens + reasoning уровень)
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 200, `{"code":0,"data":{"models":[{"id":"dyn-model-a","maxInputTokens":65536,"maxOutputTokens":8192,"reasoning":{"effort":"medium","supportedEfforts":["low","medium","high"]}},{"id":"dyn-model-b","maxInputTokens":131072,"maxOutputTokens":16384},{"id":"glm-9.9","maxInputTokens":262144,"maxOutputTokens":32768}],"agents":[{"name":"cli","models":["dyn-model-a","dyn-model-b","glm-9.9"]}]}}`, false
 	})
@@ -902,7 +902,7 @@ func TestModelsDynamic(t *testing.T) {
 		t.Errorf("dynamic ids missing: %v", ids)
 	}
 
-	// 断言字段映射：maxInputTokens → context_length，maxOutputTokens → max_output_tokens
+	// Маппинг полей assert:maxInputTokens → context_length，maxOutputTokens → max_output_tokens
 	for _, m := range data {
 		mm := m.(map[string]any)
 		switch mm["id"] {
@@ -913,7 +913,7 @@ func TestModelsDynamic(t *testing.T) {
 			if mm["max_output_tokens"].(float64) != 8192 {
 				t.Errorf("dyn-model-a max_output_tokens=%v want 8192", mm["max_output_tokens"])
 			}
-			// reasoning 档位透出：supported_efforts + default_effort
+			// reasoning Отображение тарифа:supported_efforts + default_effort
 			efforts, _ := mm["supported_efforts"].([]any)
 			if len(efforts) != 3 || efforts[0] != "low" {
 				t.Errorf("dyn-model-a supported_efforts=%v", mm["supported_efforts"])
@@ -922,7 +922,7 @@ func TestModelsDynamic(t *testing.T) {
 				t.Errorf("dyn-model-a default_effort=%v want medium", mm["default_effort"])
 			}
 		case "dyn-model-b":
-			// 上游未返回 reasoning → 两个档位字段都省略（客户端按自身默认）
+			// Апстрим не вернул ответ reasoning → Оба поля тарифа опущены (клиент использует значения по умолчанию)
 			if _, has := mm["supported_efforts"]; has {
 				t.Errorf("dyn-model-b supported_efforts should be omitted, got %v", mm["supported_efforts"])
 			}
@@ -939,7 +939,7 @@ func TestModelsDynamic(t *testing.T) {
 		}
 	}
 
-	// 第二次调用走缓存（把上游关掉也成功）
+	// Второй вызов — из кэша (успех даже при отключенном апстриме)
 	dynamicModelsCache.RLock()
 	cached := len(dynamicModelsCache.ids)
 	dynamicModelsCache.RUnlock()
@@ -949,8 +949,8 @@ func TestModelsDynamic(t *testing.T) {
 }
 
 func TestModelsDynamicFallsBackToStatic(t *testing.T) {
-	// 纯动态化（产品决策）：上游失败 → 空列表（200），不再回落静态表——
-	// 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型。
+	// Чисто динамический (решение продукта): сбой апстрима → Пустой список (200），Без отката к статической таблице —
+	// не удалось вытянуть каталог — значит upstream недоступен, фейковый список заставит клиента выбрать 11102 модели.
 	dynamicModelsCache.Lock()
 	dynamicModelsCache.ids = nil
 	dynamicModelsCache.fetched = time.Time{}
@@ -976,8 +976,8 @@ func TestModelsDynamicFallsBackToStatic(t *testing.T) {
 }
 
 func TestModelsFetchFailurePenalizesAccount(t *testing.T) {
-	// 吸收上游 9832283：models 拉取失败只进负缓存，不 NoteError——
-	// NoteError 喂的是 chat 熔断器，models 端点 5xx 跨界惩罚 chat 通道健康号。
+	// Поглотить апстрим 9832283：models ошибка получения — только в негативный кэш, не NoteError——
+	// NoteError подаётся chat Circuit breaker,models Эндпоинт 5xx Кросс-штраф chat Здоровый номер канала.
 	dynamicModelsCache.Lock()
 	dynamicModelsCache.ids = nil
 	dynamicModelsCache.fetched = time.Time{}
@@ -1016,8 +1016,8 @@ func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: up})
 
-	// 连续 3 次请求，上游持续 500 → 只应触发 1 次 fetch（负缓存生效），
-	// 纯动态下空列表仍返回 200。
+	// Непрерывный 3 запросов, апстрим продолжает 500 → Должен срабатывать только 1 Раз fetch（отрицательный кэш активен),
+	// в чисто динамическом режиме пустой список всё равно возвращается 200。
 	for i := 0; i < 3; i++ {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
@@ -1025,12 +1025,12 @@ func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
 			t.Fatalf("req %d: code=%d body=%s", i, rec.Code, rec.Body)
 		}
 	}
-	// 一轮探测 = 2 次上游调用（企业端点 + /v3/config 并发，两路全失败才进负缓存）。
+	// Один раунд зондирования = 2 вызовов upstream (enterprise-эндпоинт + /v3/config конкурентность, негативный кэш только при отказе обоих путей).
 	if got := calls.Load(); got != 2 {
 		t.Errorf("want 2 probes (console + v3), got %d", got)
 	}
 
-	// 冷却期结束（把失败时间戳拨回 10 分钟前）→ 应重新 fetch。
+	// Окончание периода кулдауна (отмотать timestamp неудачи назад 10 минут назад)→ следует повторно fetch。
 	dynamicModelsCache.Lock()
 	dynamicModelsCache.lastFail = time.Now().Add(-10 * time.Minute)
 	dynamicModelsCache.Unlock()
@@ -1046,18 +1046,18 @@ func TestModelsNegativeCacheOnFetchFailure(t *testing.T) {
 
 func TestAPIKeyAuth(t *testing.T) {
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
 		Upstream: upstream.New(),
-		APIKey:   "secret",
+		APIKey: "secret",
 	})
-	// 无 key
+	// отсутствует key
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 401 {
 		t.Errorf("no key: code=%d", rec.Code)
 	}
-	// 错 key
+	// Ошибка key
 	req = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer wrong")
 	rec = httptest.NewRecorder()
@@ -1065,7 +1065,7 @@ func TestAPIKeyAuth(t *testing.T) {
 	if rec.Code != 401 {
 		t.Errorf("wrong key: code=%d", rec.Code)
 	}
-	// 对 key（请求会继续打到上游，但此处上游 client 会失败 —— 只要不是 401 就行）
+	// Для key（запрос всё равно уйдёт в апстрим, но здесь апстрим client завершится ошибкой —— если только не 401 достаточно)
 	req = httptest.NewRequest("GET", "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec = httptest.NewRecorder()
@@ -1092,7 +1092,7 @@ func TestStatusEndpoint(t *testing.T) {
 	if strings.Contains(body, "AccessToken") || strings.Contains(body, `"at"`) {
 		t.Error("token leaked in status output")
 	}
-	// Phase 3 汇总字段。
+	// Phase 3 агрегирующее поле.
 	var statusBody map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &statusBody); err != nil {
 		t.Fatalf("status not json: %v", err)
@@ -1102,7 +1102,7 @@ func TestStatusEndpoint(t *testing.T) {
 		statusBody["in_flight_full"] != float64(0) {
 		t.Errorf("summary=%v want total=1 healthy=1 cooling=0 disabled=0 in_flight_full=0", statusBody)
 	}
-	// Phase v3：池级 sticky_sessions + redis_mode。
+	// Phase v3：Уровень пула sticky_sessions + redis_mode。
 	if statusBody["sticky_sessions"] != float64(0) {
 		t.Errorf("sticky_sessions=%v want 0", statusBody["sticky_sessions"])
 	}
@@ -1111,7 +1111,7 @@ func TestStatusEndpoint(t *testing.T) {
 	}
 }
 
-// TestStatusInFlightFull /status 透出满载计数：healthy 且占满在途的账号数。
+// TestStatusInFlightFull /status выводить счетчик заполненности:healthy и число аккаунтов с незавершёнными запросами.
 func TestStatusInFlightFull(t *testing.T) {
 	p := testPoolWith(
 		&auth.Auth{UID: "full", AccessToken: "at", ExpiresAt: 9999999999},
@@ -1140,7 +1140,7 @@ func TestStatusInFlightFull(t *testing.T) {
 }
 
 func TestStatusPortraitFields(t *testing.T) {
-	// Phase 3：/status 单账号需返回健康画像字段。
+	// Phase 3：/status Для одиночного аккаунта нужно вернуть поля health-профиля.
 	p := testPoolWith(&auth.Auth{UID: "u1", Nickname: "nick", AccessToken: "at", ExpiresAt: 9999999999})
 	p.NoteSuccess("u1")
 	p.NoteSuccess("u1")
@@ -1179,7 +1179,7 @@ func TestStatusPortraitFields(t *testing.T) {
 	}
 }
 
-// TestHealthzEmptyPool 空池（healthy=0）→ 503，表示暂不可服务。
+// TestHealthzEmptyPool Пустой пул (healthy=0）→ 503，означает временно недоступен.
 func TestHealthzEmptyPool(t *testing.T) {
 	h := NewHandler(Config{Pool: pool.New(""), Upstream: upstream.New()})
 	rec := httptest.NewRecorder()
@@ -1196,7 +1196,7 @@ func TestHealthzEmptyPool(t *testing.T) {
 	}
 }
 
-// TestHealthz503WhenNoHealthy 所有账号禁用/冷却 → 503。
+// TestHealthz503WhenNoHealthy Все аккаунты отключены/Охлаждение → 503。
 func TestHealthz503WhenNoHealthy(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	p.Disable("u1", "session dead")
@@ -1219,8 +1219,8 @@ func TestHealthz503WhenNoHealthy(t *testing.T) {
 	}
 }
 
-// TestHealthz503WhenAllInFlightFull 全部账号 healthy 但都占满在途 → 503（与 chat 同口径），
-// 且 healthy 语义未变（仍为 1）：满载不是状态机健康维度的变化，是探活口径单独叠加。
+// TestHealthz503WhenAllInFlightFull Все аккаунты healthy но все занимают in-flight → 503（и chat в той же метрике),
+// И healthy Семантика не изменилась (по-прежнему 1）：Полная загрузка — не изменение health-измерения стейт-машины, а отдельное наложение метрики liveness.
 func TestHealthz503WhenAllInFlightFull(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	p.SetMaxInFlight(1)
@@ -1240,13 +1240,13 @@ func TestHealthz503WhenAllInFlightFull(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("healthz not json: %v body=%s", err, rec.Body)
 	}
-	// healthy 语义未变：账号仍是 healthy（只占满在途，非冷却/禁用）。
+	// healthy семантика не изменилась: аккаунт всё ещё healthy（занимает только in-flight, не кулдаун/отключено).
 	if resp["healthy"] != float64(1) || resp["total"] != float64(1) {
 		t.Errorf("healthz json=%v want healthy=1 total=1 (healthy semantics unchanged)", resp)
 	}
 }
 
-// TestHealthz200WhenHealthy 有健康账号 → 200。
+// TestHealthz200WhenHealthy Есть рабочие аккаунты → 200。
 func TestHealthz200WithHealthy(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: upstream.New()})
@@ -1264,13 +1264,13 @@ func TestHealthz200WithHealthy(t *testing.T) {
 	}
 }
 
-// TestHealthzServiceIdentity /healthz 无论 200 还是 503 都必须带网关身份标识
-// （响应体 service 字段 + X-Service 头）：宿主探测打到同端口的旧服务/其他服务时，
-// 对方即使返回 2xx 也不带本标识，宿主据此判"假成功"。
+// TestHealthzServiceIdentity /healthz независимо от 200 или 503 все должны содержать идентификатор шлюза
+// （тело ответа service Поле + X-Service заголовок): проба хоста попадает на старый сервис того же порта/при других сервисах,
+// Даже если другая сторона вернёт 2xx также не несет этот флаг, хост по нему определяет"Ложный успех"。
 func TestHealthzServiceIdentity(t *testing.T) {
 	cases := []struct {
-		name     string
-		setup    func(*pool.Pool)
+		name string
+		setup func(*pool.Pool)
 		wantCode int
 	}{
 		{"healthy", func(*pool.Pool) {}, http.StatusOK},
@@ -1300,13 +1300,13 @@ func TestHealthzServiceIdentity(t *testing.T) {
 	}
 }
 
-// TestHealthzServiceIdentityWithoutAuth /healthz 保持无鉴权（负载均衡友好）：
-// 配了 api_key 也不要求 Bearer，身份字段照常返回。
+// TestHealthzServiceIdentityWithoutAuth /healthz оставить без аутентификации (friendly к балансировщику):
+// настроено api_key также не требуется Bearer，Поля идентификации возвращаются как обычно.
 func TestHealthzServiceIdentityWithoutAuth(t *testing.T) {
 	h := NewHandler(Config{
-		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
+		Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}),
 		Upstream: upstream.New(),
-		APIKey:   "secret",
+		APIKey: "secret",
 	})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
@@ -1322,14 +1322,14 @@ func TestStatusRequiresAuth(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", Nickname: "nick", AccessToken: "at", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: upstream.New(), APIKey: "secret"})
 
-	// 无 token → 401
+	// отсутствует token → 401
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
 	if rec.Code != 401 {
 		t.Errorf("no token: code=%d", rec.Code)
 	}
 
-	// 带 token → 200
+	// Лента token → 200
 	rec = httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/status", nil)
 	req.Header.Set("Authorization", "Bearer secret")
@@ -1338,7 +1338,7 @@ func TestStatusRequiresAuth(t *testing.T) {
 		t.Errorf("with token: code=%d", rec.Code)
 	}
 
-	// /healthz 无鉴权仍 200
+	// /healthz без аутентификации всё равно 200
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 200 {
@@ -1346,27 +1346,27 @@ func TestStatusRequiresAuth(t *testing.T) {
 	}
 }
 
-// TestContentBlockedTriggersDegradedRetry passthrough 模式下首请求 400（11128 文案）
-// → 降级重试（Degraded）→ 200，客户端无感。验证第二次出站 body 为 Degraded。
+// TestContentBlockedTriggersDegradedRetry passthrough Первый запрос в режиме 400（11128 текст)
+// → повтор с даунгрейдом (Degraded）→ 200，Незаметно для клиента. Проверка второго исходящего body для Degraded。
 func TestContentBlockedTriggersDegradedRetry(t *testing.T) {
-	// 记录每次出站请求体，断言第二次为 Degraded 文本。
+	// Логировать тело каждого исходящего запроса, assert что второй — Degraded текст.
 	var bodies [][]byte
 	up := &upstream.Client{
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			raw, _ := io.ReadAll(r.Body)
 			bodies = append(bodies, raw)
-			// 首次（body 含原始 system）返回 400 内容拦截；后续返回 200。
+			// впервые (body содержит исходный system）вернуть 400 Блокировка контента; последующий возврат 200。
 			if len(bodies) == 1 {
 				return &http.Response{
 					StatusCode: 400,
-					Header:     http.Header{"Content-Type": []string{"application/json"}},
-					Body:       io.NopCloser(strings.NewReader(`{"code":11128,"msg":"blocked by security policy"}`)),
+					Header: http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(strings.NewReader(`{"code":11128,"msg":"blocked by security policy"}`)),
 				}, nil
 			}
 			return &http.Response{
 				StatusCode: 200,
-				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-				Body:       io.NopCloser(strings.NewReader(sseOK)),
+				Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(sseOK)),
 			}, nil
 		})},
 		ChatBaseCN: "https://fake.example",
@@ -1384,7 +1384,7 @@ func TestContentBlockedTriggersDegradedRetry(t *testing.T) {
 	if len(bodies) != 2 {
 		t.Fatalf("want 2 upstream calls (first 400 + retry), got %d", len(bodies))
 	}
-	// 第二次出站 body 的 messages 头部 system 内容应为 Degraded 文本。
+	// второй выход body messages заголовок system Содержимое должно быть Degraded текст.
 	if !strings.Contains(string(bodies[1]), prompt.Degraded) {
 		t.Errorf("second body should contain Degraded prompt: %s", bodies[1])
 	}
@@ -1393,7 +1393,7 @@ func TestContentBlockedTriggersDegradedRetry(t *testing.T) {
 	}
 }
 
-// TestContentBlockedStickyDegraded 降级后新请求直达 Degraded（不再先撞 400）。
+// TestContentBlockedStickyDegraded после даунгрейда новый запрос идёт напрямую в Degraded（Больше не проверять сначала 400）。
 func TestContentBlockedStickyDegraded(t *testing.T) {
 	var firstCall bool
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -1406,24 +1406,24 @@ func TestContentBlockedStickyDegraded(t *testing.T) {
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "passthrough"})
 
-	// 首请求触发降级 → 200。
+	// первый запрос триггерит деградацию → 200。
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
 		strings.NewReader(`{"model":"glm-5.2","stream":true,"messages":[{"role":"system","content":"x"},{"role":"user","content":"hi"}]}`)))
 	if rec.Code != 200 {
 		t.Fatalf("first req code=%d", rec.Code)
 	}
-	// 降级粘性：新请求 Active()=true，body 已被 Rewrite(Degraded)，上游首字节即 200。
-	// 但 fake 上游只对 firstCall 返回 400，之后都 200，无法区分"直达"与"重试"。
-	// 用 degrade.Active() 直接断言粘性生效。
+	// Стикки-деградация: новый запрос Active()=true，body Уже Rewrite(Degraded)，Первый байт апстрима сразу 200。
+	// Но fake Апстрим только для firstCall вернуть 400，после этого всё 200，Невозможно различить"прямой проход"и"повтор"。
+	// использовать degrade.Active() прямо assert'ить срабатывание sticky.
 	if !h.degrade.Active() {
 		t.Fatal("degrade should be active after trigger")
 	}
 }
 
-// TestContentBlockedCustomModeDoesNotDegrade custom 模式不触发降级重试
-// （custom 已用自有提示词替换，不应再有 system 来源误报）；仍拦则直接回
-// 400 content_blocked 防火墙文案（不轮转、不暴露账号/上游错误码）。
+// TestContentBlockedCustomModeDoesNotDegrade custom Режим не триггерит fallback-ретрай
+// （custom Заменено собственным промптом, больше не должно быть system ложное срабатывание источника); если всё ещё блокируется — прямой возврат
+// 400 content_blocked Текст для файрвола (без ротации, без раскрытия аккаунта/код ошибки апстрима).
 func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 400, `{"code":11128,"msg":"blocked by security policy"}`, false
@@ -1434,7 +1434,7 @@ func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
 		strings.NewReader(`{"model":"glm-5.2","messages":[{"role":"system","content":"old"},{"role":"user","content":"hi"}]}`)))
-	// custom 模式下仍拦 → 400 content_blocked（内容终态，换号无意义），不降级重试。
+	// custom в режиме всё равно блокировать → 400 content_blocked（контент в терминальном состоянии, смена аккаунта бессмысленна), без даунгрейд-ретрая.
 	if rec.Code != 400 {
 		t.Fatalf("code=%d want 400 content_blocked (custom does not degrade)", rec.Code)
 	}
@@ -1449,8 +1449,8 @@ func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 	if env.Error.Code != "content_blocked" {
 		t.Errorf("error.code=%q want content_blocked", env.Error.Code)
 	}
-	// 错误透传（error-passthrough，吸收上游 5755fe3）：message 装上游 body 原文
-	// （code/msg 原样），客户端必须看到真实错误才能排查；gateway_hint 并列补充。
+	// сквозная передача ошибки (error-passthrough，Поглотить апстрим 5755fe3）：message Установить апстрим body Исходный текст
+	// （code/msg как есть), клиент должен видеть реальную ошибку для диагностики;gateway_hint Параллельное дополнение.
 	if !strings.Contains(rec.Body.String(), "11128") {
 		t.Errorf("message should carry upstream original body (passthrough): %s", rec.Body.String())
 	}
@@ -1462,13 +1462,13 @@ func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 	}
 }
 
-// TestContentBlockedDoesNotPenalizeAccount ErrContentBlocked 不罚账号（无冷却/熔断/NoteError）。
+// TestContentBlockedDoesNotPenalizeAccount ErrContentBlocked аккаунт не штрафуется (без кулдауна/Отключение/NoteError）。
 func TestContentBlockedDoesNotPenalizeAccount(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		return 400, `{"code":11128,"msg":"blocked by security policy"}`, false
 	})
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
-	// 熔断阈值 1：若误罚 NoteError 一次即熔断；content_blocked 不应喂熔断。
+	// Порог circuit breaker 1：при ложном штрафе NoteError Один раз — и熔断;content_blocked Не должно триггерить circuit breaker.
 	p.SetBreaker(1, time.Hour, time.Hour)
 	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "passthrough"})
 
@@ -1482,15 +1482,15 @@ func TestContentBlockedDoesNotPenalizeAccount(t *testing.T) {
 	}
 }
 
-// TestCustomModeFingerprintSanitizePreserved custom 端到端：user 消息含 Claude Code
-// 指纹句（PR39 fixture 串）→ Rewrite 注入自有 system → 经 sanitize → 出站 body 中
-// 该指纹被改写、system 为自有提示词。证明两层（提示词替换 + 清洗）叠加工作。
+// TestCustomModeFingerprintSanitizePreserved custom End-to-end:user Сообщение содержит Claude Code
+// фраза отпечатка (PR39 fixture строка)→ Rewrite Инжект собственного system → Через sanitize → исходящий body Средний
+// Этот отпечаток перезаписан,system — собственный промпт. Доказательство в два слоя (подмена промпта + очистка) работают совместно.
 //
-// 两层各自职责（互不替代）：
-//   - prompt.Rewrite 替换 system/developer 消息（消灭 system 来源指纹）；
-//   - sanitizeMessages 改写 user/assistant 消息中残留的指纹串（兜底用户上下文）。
+// Обязанности двух уровней (невзаимозаменяемы):
+// - prompt.Rewrite Замена system/developer сообщение (устранение system отпечаток источника);
+// - sanitizeMessages Перезаписать user/assistant Строка отпечатка, оставшаяся в сообщении (fallback пользовательского контекста).
 func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
-	// 捕获出站 body（prepareBody 已强制 stream + 归一 + 清洗后）。
+	// перехват исходящего body（prepareBody Принудительно stream + Нормализация + после очистки).
 	var sentBody []byte
 	up := &upstream.Client{
 		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1498,8 +1498,8 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 			sentBody = raw
 			return &http.Response{
 				StatusCode: 200,
-				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-				Body:       io.NopCloser(strings.NewReader(sseOK)),
+				Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(sseOK)),
 			}, nil
 		})},
 		ChatBaseCN: "https://fake.example",
@@ -1509,7 +1509,7 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 	const customSys = "我是网关自有提示词"
 	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "custom", PromptText: customSys})
 
-	// user 消息含 Claude Code 指纹句（PR39 的 fixture 串，逐字精确指纹）。
+	// user Сообщение содержит Claude Code фраза отпечатка (PR39 fixture строка, точный посимвольный фингерпринт).
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{
 		"model":"glm-5.2",
 		"stream":true,
@@ -1524,15 +1524,15 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
 	}
 	out := string(sentBody)
-	// 1) system 为自有提示词，旧 system 内容零残留。
+	// 1) system для собственных промптов, старый system Нулевой остаток контента.
 	if !strings.Contains(out, customSys) {
 		t.Errorf("out body should contain custom system prompt: %s", out)
 	}
 	if strings.Contains(out, "official CLI for Claude.") && strings.Contains(out, "You are Claude Code, Anthropic's") {
-		// 旧 system 原文（含句点）不应以 system 角色出现；但 sanitize 把它改写为
-		// "...official CLI tool for Claude."，所以原文 fingerprint 串应消失。
+		// старый system оригинал (включая точку) не должен начинаться с system появляется роль; но sanitize Переписать это как
+		// "...official CLI tool for Claude."，поэтому оригинал fingerprint Строка должна исчезнуть.
 	}
-	// 原始指纹串（逐字精确匹配）在出站 body 中应被改写：
+	// Исходная строка отпечатка (точное посимвольное совпадение) на исходящем body в ... должно быть переписано:
 	// "official CLI for Claude." → "official CLI tool for Claude."
 	// "Main branch (" → "Default branch ("
 	if strings.Contains(out, "official CLI for Claude.") {
@@ -1541,14 +1541,14 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 	if strings.Contains(out, "Main branch (you will usually use this for PRs)") {
 		t.Errorf("branch fingerprint not rewritten by sanitize in user msg: %s", out)
 	}
-	// 改写后的痕迹应在（证明 sanitize 层生效，不是"全删了"）。
+	// следы после перезаписи должны быть в (доказательство sanitize действует на уровне , а не"полностью удалено"）。
 	if !strings.Contains(out, "official CLI tool for Claude.") {
 		t.Errorf("sanitized identity rewrite missing: %s", out)
 	}
 	if !strings.Contains(out, "Default branch (you will usually use this for PRs)") {
 		t.Errorf("sanitized branch rewrite missing: %s", out)
 	}
-	// 2) messages 头部恰好一条 system = 自有提示词（Rewrite 已删旧 system）。
+	// 2) messages в заголовке ровно одна запись system = собственный промпт (Rewrite Старое уже удалено system）。
 	var obj map[string]any
 	if err := json.Unmarshal(sentBody, &obj); err != nil {
 		t.Fatalf("out body not json: %v %s", err, out)

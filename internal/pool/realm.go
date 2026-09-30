@@ -1,4 +1,4 @@
-// 分池选号域：按 realm（cn/global）过滤选号与可用集合。realm=="" 退化为现状。
+// Домен выбора номера из пула: по realm（cn/global）фильтрация выбора и доступного набора.realm=="" Деградация к текущему состоянию.
 package pool
 
 import (
@@ -6,12 +6,12 @@ import (
 	"time"
 )
 
-// expiringVirtualSlots 快过期账号在新会话候选集中的虚拟实例权重。
-// 3:1 是温和偏好，不是固定比例：账号组成变化会自然改变最终占比。
+// expiringVirtualSlots вес виртуального инстанса скоро истекающего аккаунта в кандидат-множестве новой сессии.
+// 3:1 Это мягкое предпочтение, а не фиксированная пропорция: изменение состава аккаунтов естественно меняет итоговую долю.
 const expiringVirtualSlots = 3
 
-// AvailableUIDsForRealm 同 AvailableUIDs，但仅返回 Realm()==realm 的账号。
-// realm=="" 退化为 AvailableUIDs（现状语义）。
+// AvailableUIDsForRealm Совм. AvailableUIDs，но возвращает только Realm()==realm аккаунта.
+// realm=="" деградирует в AvailableUIDs（текущая семантика).
 func (p *Pool) AvailableUIDsForRealm(realm string) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -33,14 +33,14 @@ func (p *Pool) AvailableUIDsForRealm(realm string) []string {
 	return uids
 }
 
-// WeightedAvailableUIDsForModelRealm 返回带虚拟实例权重的可用账号列表。
+// WeightedAvailableUIDsForModelRealm Вернуть список доступных аккаунтов с весом виртуального инстанса.
 //
-// 普通账号出现 1 次；有效快过期账号出现 expiringVirtualSlots 次。调用方继续按
-// 原有序列表哈希，即可让新会话对快过期账号形成温和偏好。重复项按 UID 排序后
-// 展开，保证同一账号拓扑下不同进程得到一致列表。
+// у обычного аккаунта появилось 1 раз; появление валидных скоро истекающих аккаунтов expiringVirtualSlots раз. Вызывающая сторона продолжает по
+// хеш исходного упорядоченного списка, позволяет новым сессиям мягко предпочитать скоро истекающие аккаунты. Дубликаты по UID После сортировки
+// Развернуть, гарантируя единый список для разных процессов в топологии одного аккаунта.
 //
-// 该方法是现有 AvailableUIDsForModelRealm 的增量入口，不改变旧方法语义，也不
-// 修改配置、状态或 Redis schema。prefer_expiring=false 时退化为逐账号一次。
+// Данный метод — существующий AvailableUIDsForModelRealm инкрементальная точка входа, не меняет семантику старого метода и не
+// изменение конфигурации, статуса или Redis schema。prefer_expiring=false в этом случае деградация до одного раза на аккаунт.
 func (p *Pool) WeightedAvailableUIDsForModelRealm(model, realm string) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -75,8 +75,8 @@ func (p *Pool) WeightedAvailableUIDsForModelRealm(model, realm string) []string 
 	return out
 }
 
-// AvailableUIDsForModelRealm 同 AvailableUIDsForModel，但仅返回 Realm()==realm 的账号
-// （6004 模型豁免照常生效）。realm=="" 退化为 AvailableUIDsForModel。
+// AvailableUIDsForModelRealm Совм. AvailableUIDsForModel，но возвращает только Realm()==realm аккаунта
+// （6004 исключение для модели по-прежнему действует).realm==«« деградирует в AvailableUIDsForModel。
 func (p *Pool) AvailableUIDsForModelRealm(model, realm string) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

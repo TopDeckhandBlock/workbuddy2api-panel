@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// extractCacheKey 从改写后的 body 里取出 prompt_cache_key 字段值。
+// extractCacheKey Из переписанного body извлечь из prompt_cache_key значение поля.
 func extractCacheKey(t *testing.T, body []byte) string {
 	t.Helper()
 	var obj map[string]any
@@ -17,8 +17,8 @@ func extractCacheKey(t *testing.T, body []byte) string {
 	return v
 }
 
-// TestInjectPromptCacheKey_PreservesExisting 覆盖任务用例 1：
-// 入站 body 已带 prompt_cache_key → 原值保留，不被网关覆盖。
+// TestInjectPromptCacheKey_PreservesExisting покрыть кейсы задач 1：
+// inbound body Уже содержит prompt_cache_key → Исходное значение сохраняется, шлюзом не перезаписывается.
 func TestInjectPromptCacheKey_PreservesExisting(t *testing.T) {
 	// Arrange
 	uid := "user-abc-123"
@@ -34,10 +34,10 @@ func TestInjectPromptCacheKey_PreservesExisting(t *testing.T) {
 	}
 }
 
-// TestInjectPromptCacheKey_UsesConversationID 覆盖任务用例 2：
-// body 无 prompt_cache_key 但有 conversation_id → 用它做会话哈希源。
-// 格式 wb2a-<uid8>-<conversationHash>：conversation_id 不逐字出现，而是驱动哈希段
-// （同 id 同 key、不同 id 不同 key）。同时仍带 uid8 隔离前缀。
+// TestInjectPromptCacheKey_UsesConversationID покрыть кейсы задач 2：
+// body отсутствует prompt_cache_key Но есть conversation_id → использовать его как источник хеша сессии.
+// формат wb2a-<uid8>-<conversationHash>：conversation_id появляется не дословно, а управляет хеш-сегментом
+// （Совм. id Совм. key、Разное id Разное key）。при этом всё ещё содержит uid8 префикс изоляции.
 func TestInjectPromptCacheKey_UsesConversationID(t *testing.T) {
 	uid := "user-abc-123"
 	in := `{"model":"glm-5.2","messages":[],"conversation_id":"conv-42"}`
@@ -50,12 +50,12 @@ func TestInjectPromptCacheKey_UsesConversationID(t *testing.T) {
 	if !strings.Contains(got, "user-abc") {
 		t.Fatalf("expected uid8 isolation prefix, got=%q", got)
 	}
-	// 同 conversation_id 两次出站 → 同 key（稳定）。
+	// Совм. conversation_id Два исходящих → Совм. key（стабильно).
 	out2 := InjectPromptCacheKey([]byte(in), uid, "")
 	if got2 := extractCacheKey(t, out2); got2 != got {
 		t.Fatalf("non-deterministic key for same conversation_id: %q vs %q", got, got2)
 	}
-	// 不同 conversation_id → 不同 key（哈希段区分）。
+	// Разное conversation_id → Разное key（различение по хеш-сегменту).
 	inB := `{"model":"glm-5.2","messages":[],"conversation_id":"conv-99"}`
 	gotB := extractCacheKey(t, InjectPromptCacheKey([]byte(inB), uid, ""))
 	if gotB == got {
@@ -63,8 +63,8 @@ func TestInjectPromptCacheKey_UsesConversationID(t *testing.T) {
 	}
 }
 
-// TestInjectPromptCacheKey_GeneratesStableKey 覆盖任务用例 3：
-// body 两者都无 → 网关生成稳定键，两次同输入同账号得到同 key。
+// TestInjectPromptCacheKey_GeneratesStableKey покрыть кейсы задач 3：
+// body Оба отсутствуют → шлюз генерирует стабильный ключ, два одинаковых входа на одном аккаунте дают один и тот же key。
 func TestInjectPromptCacheKey_GeneratesStableKey(t *testing.T) {
 	uid := "user-abc-123"
 	conv := "conv-stable"
@@ -78,8 +78,8 @@ func TestInjectPromptCacheKey_GeneratesStableKey(t *testing.T) {
 	}
 }
 
-// TestInjectPromptCacheKey_AccountIsolation 覆盖任务用例 4：
-// 不同账号 → key 不同（隔离验证）。
+// TestInjectPromptCacheKey_AccountIsolation покрыть кейсы задач 4：
+// Разные аккаунты → key различаются (изолированная проверка).
 func TestInjectPromptCacheKey_AccountIsolation(t *testing.T) {
 	conv := "conv-shared"
 	in := `{"model":"glm-5.2","messages":[]}`
@@ -94,8 +94,8 @@ func TestInjectPromptCacheKey_AccountIsolation(t *testing.T) {
 	}
 }
 
-// TestInjectPromptCacheKey_Format 覆盖任务用例 5：
-// cache key 格式校验（含 uid8 前缀）。
+// TestInjectPromptCacheKey_Format покрыть кейсы задач 5：
+// cache key Валидация формата (вкл. uid8 префикс).
 func TestInjectPromptCacheKey_Format(t *testing.T) {
 	uid := "1234567890abcdef"
 	in := `{"model":"glm-5.2","messages":[]}`
@@ -109,9 +109,9 @@ func TestInjectPromptCacheKey_Format(t *testing.T) {
 	}
 }
 
-// TestInjectPromptCacheKey_EmptyConversation 覆盖任务用例 3 边界：
-// 无 conversation_id 且无会话标识 → 生成键含 uid8 但 conversationHash 段为定值（不复用前缀）。
-// 不应报错、不应空串（key 非空）。
+// TestInjectPromptCacheKey_EmptyConversation покрыть кейсы задач 3 Граница:
+// отсутствует conversation_id и без идентификатора сессии → Сгенерированный ключ содержит uid8 Но conversationHash Сегмент — константа (без переиспользования префикса).
+// не должно быть ошибки, не должно быть пустой строки (key непусто).
 func TestInjectPromptCacheKey_EmptyConversation(t *testing.T) {
 	uid := "user-abc-123"
 	in := `{"model":"glm-5.2","messages":[]}`
@@ -128,9 +128,9 @@ func TestInjectPromptCacheKey_EmptyConversation(t *testing.T) {
 	}
 }
 
-// TestPrepareBodyOptNoCacheKeyInjection 覆盖任务用例 6：
-// PrepareBodyOpt（sanitize=false 的旧入口）行为不变——不注入 cache key。
-// 向后兼容：仅传 body 不给 cacheKey 上下文时，不得引入新字段。
+// TestPrepareBodyOptNoCacheKeyInjection покрыть кейсы задач 6：
+// PrepareBodyOpt（sanitize=false старого входа) поведение не меняется — без инъекции cache key。
+// обратная совместимость: передавать только body Не выдавать cacheKey В контексте нельзя вводить новые поля.
 func TestPrepareBodyOptNoCacheKeyInjection(t *testing.T) {
 	in := `{"model":"glm-5.2","messages":[]}`
 	out := PrepareBodyOpt([]byte(in), false)

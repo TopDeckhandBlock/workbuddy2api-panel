@@ -1,20 +1,20 @@
-// login.go — WorkBuddy OAuth 登录（设备授权流程，CN realm；--realm=global 供国际版）。
+// login.go — WorkBuddy OAuth Вход (процесс авторизации устройства,CN realm；--realm=global для международной версии).
 //
-// 两个子命令，由 login.sh 顺序驱动：
+// Две подкоманды, от login.sh Детерминизм по порядку:
 //
-//	login [--realm=cn|global] url   → POST /v2/plugin/auth/state?platform=CLI 拿 state+authUrl，
-//	                                  state 落 /tmp/wb2api-login-state.json，stdout 打印授权 URL
-//	login [--realm=cn|global] poll  → 读 state，GET /v2/plugin/auth/token?state= 一次，
-//	                                  成功再 GET /v2/plugin/login/account?state= 拿 uid/nickname，
-//	                                  stdout 打印完整 token+account JSON（含 realm 键）
+//	login [--realm=cn|global] url → POST /v2/plugin/auth/state?platform=CLI Взять state+authUrl，
+//	 state Сброс /tmp/wb2api-login-state.json，stdout Печать авторизации URL
+//	login [--realm=cn|global] poll → Чтение state，GET /v2/plugin/auth/token?state= Один раз,
+//	 После успеха снова GET /v2/plugin/login/account?state= Взять uid/nickname，
+//	 stdout вывести полностью token+account JSON（Содержит realm ключа)
 //
-// --realm 默认 cn。按 realm 切换上游端点与 Origin/Referer：
+// --realm По умолчанию cn。Нажать realm Переключение upstream-эндпоинта и Origin/Referer：
 //
-//	cn     → https://copilot.tencent.com（Origin: https://www.codebuddy.cn）
+//	cn → https://copilot.tencent.com（Origin: https://www.codebuddy.cn）
 //	global → https://www.workbuddy.ai（Origin: https://www.workbuddy.ai）
 //
-// state 落盘带 realm，poll 读回校验与命令行 --realm 一致（防混域）。
-// 无 PKCE（workbuddy 设备流由服务端签发 state）。
+// state сохранение на диск с realm，poll обратное чтение с проверкой и командная строка --realm совпадает (защита от смешения доменов).
+// отсутствует PKCE（workbuddy Device flow выпускается сервером state）。
 package main
 
 import (
@@ -33,27 +33,27 @@ import (
 	auth2 "github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
-// 上游常量：CN → copilot.tencent.com（Origin 为 codebuddy.cn）；global → www.workbuddy.ai
-// （base 与 Origin/Referer 同域）。端点 URL 由 realmConfig 按 realm 动态拼出，不再硬编码。
+// константа upstream:CN → copilot.tencent.com（Origin для codebuddy.cn）；global → www.workbuddy.ai
+// （base и Origin/Referer тот же домен). Эндпоинт URL От realmConfig Нажать realm Собирается динамически, больше не хардкод.
 const (
-	upstreamBaseCN      = "https://copilot.tencent.com"
-	upstreamBaseGlobal  = "https://www.workbuddy.ai"
-	clientUA            = "CLI/2.63.2 CodeBuddy/2.63.2"
-	originRefererCN     = "https://www.codebuddy.cn"
+	upstreamBaseCN = "https://copilot.tencent.com"
+	upstreamBaseGlobal = "https://www.workbuddy.ai"
+	clientUA = "CLI/2.63.2 CodeBuddy/2.63.2"
+	originRefererCN = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
 )
 
-// 登录 state 落盘路径（var 便于测试替换临时文件）
+// логин state путь сохранения на диск (var для удобной подмены временного файла в тестах)
 // Portable across OSes: the upstream hardcoded "/tmp/...", which on
 // Windows resolves to <drive>:\tmp\... and aborts the OAuth flow with
 // "The system cannot find the path specified". os.TempDir() is /tmp on Linux.
 var stateFile = filepath.Join(os.TempDir(), "wb2api-login-state.json")
 
-// exitFunc 供测试替换（默认 os.Exit；测试持临时替换为 panic 以进程内捕获 fatal）。
+// exitFunc Для подмены в тестах (по умолчанию os.Exit；В тестах временно заменить на panic перехват внутри процесса fatal）。
 var exitFunc = os.Exit
 
-// realmConfig 按 realm 返回上游 base 与 Origin/Referer origin：global →
-// (www.workbuddy.ai, www.workbuddy.ai)；cn/非法/缺省 → (copilot.tencent.com, codebuddy.cn)。
+// realmConfig Нажать realm Вернуть апстрим base и Origin/Referer origin：global →
+// (www.workbuddy.ai, www.workbuddy.ai)；cn/Недопустимый/по умолчанию → (copilot.tencent.com, codebuddy.cn)。
 func realmConfig(realm string) (base, origin string) {
 	if realm == realmGlobal {
 		return upstreamBaseGlobal, originRefererGlobal
@@ -61,8 +61,8 @@ func realmConfig(realm string) (base, origin string) {
 	return upstreamBaseCN, originRefererCN
 }
 
-// commonHeaders 按 origin 设置通用请求头（Origin/Referer 随 realm 变化）。
-// 返回 func(*http.Request)，由调用方按 realm 选定的 origin 构造一次后复用。
+// commonHeaders Нажать origin установить общие заголовки запроса (Origin/Referer Случайный realm изменение).
+// вернуть func(*http.Request)，Вызывающей стороной по realm Выбранный origin Создать один раз и переиспользовать.
 func commonHeaders(origin string) func(*http.Request) {
 	return func(req *http.Request) {
 		req.Header.Set("Content-Type", "application/json")
@@ -74,14 +74,14 @@ func commonHeaders(origin string) func(*http.Request) {
 	}
 }
 
-// apiEnvelope 与 main.go:429-433 一致
+// apiEnvelope и main.go:429-433 консистентно
 type apiEnvelope struct {
-	Code int             `json:"code"`
-	Msg  string          `json:"msg"`
+	Code int `json:"code"`
+	Msg string `json:"msg"`
 	Data json.RawMessage `json:"data"`
 }
 
-// doJSON 与 oauth.go:33-66 一致：{code,msg,data} 信封，code!=0 → error
+// doJSON и oauth.go:33-66 совпадает:{code,msg,data} конверт,code!=0 → error
 func doJSON(client *http.Client, method, fullURL string, headers func(*http.Request), body io.Reader) (json.RawMessage, int, error) {
 	req, err := http.NewRequest(method, fullURL, body)
 	if err != nil {
@@ -90,7 +90,7 @@ func doJSON(client *http.Client, method, fullURL string, headers func(*http.Requ
 	if headers != nil {
 		headers(req)
 	} else {
-		// 缺省头：CN origin（与原 commonHeaders() 行为一致，零回归）
+		// заголовок по умолчанию:CN origin（С исходным commonHeaders() Поведение идентично, ноль регрессий)
 		commonHeaders(originRefererCN)(req)
 	}
 	resp, err := client.Do(req)
@@ -122,17 +122,17 @@ func fatal(format string, args ...any) {
 
 type loginState struct {
 	State string `json:"state"`
-	Realm string `json:"realm,omitempty"` // url 落盘时写回的 realm，poll 读回校验防混域
+	Realm string `json:"realm,omitempty"` // url записанное при сбросе на диск realm，poll обратное чтение с проверкой от смешения доменов
 }
 
-// realm 取值枚举（与 internal/auth 的 Realm() 归一化输出一致）。
+// realm Перечисление значений (с internal/auth Realm() нормализованный вывод совпадает).
 const (
-	realmCN     = "cn"
+	realmCN = "cn"
 	realmGlobal = "global"
 )
 
-// parseRealmArgs 解析开头的 --realm=cn|global（或分离式 --realm <v>）flag，缺省 cn。
-// 大小写不敏感归一化；非法值/缺值报错。桌椅剩余参数（子命令）顺序不变。
+// parseRealmArgs парсинг начала --realm=cn|global（или раздельный --realm <v>）flag，по умолчанию cn。
+// Нормализация без учета регистра; невалидное значение/Ошибка отсутствия значения. Порядок остальных параметров (подкоманды) не меняется.
 func parseRealmArgs(args []string) (realm string, rest []string, err error) {
 	realm = realmCN
 	for i := 0; i < len(args); i++ {
@@ -161,12 +161,12 @@ func parseRealmArgs(args []string) (realm string, rest []string, err error) {
 	return realm, rest, nil
 }
 
-// resolveRealmInput 把交互式选域的一行输入归一化为 realm（纯函数，login.sh 交互分支
-// 的核心决策，可测）。规则：
+// resolveRealmInput нормализовать однострочный ввод интерактивного выбора домена в realm（Чистая функция,login.sh Ветка взаимодействия
+// ключевое решение, тестируемо). Правило:
 //
-//	"1"/"cn"（大小写不敏感）/""（回车默认）→ cn
+//	"1«/«cn»（без учёта регистра)/«"（Enter по умолчанию)→ cn
 //	"2"/"global" → global
-//	其他 → ("", false)（调用方回默认 cn）
+//	прочее → ("", false)（Вызывающая сторона возвращает дефолт cn）
 func resolveRealmInput(input string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case "", "1", "cn":
@@ -177,34 +177,34 @@ func resolveRealmInput(input string) (string, bool) {
 	return "", false
 }
 
-// promptRealm 交互式选域：向 out 打印选项提示（out 接 stderr，stdout 留给 realm 本身），
-// 从 in 读一行，返回归一化 realm。非法输入警告后回落 cn；EOF（非交互/管道）回落 cn。
+// promptRealm интерактивный выбор домена: к out Подсказка параметров печати (out Подключение stderr，stdout оставить для realm сам),
+// Из in чтение строки, возврат нормализованного realm。Откат после предупреждения о невалидном вводе cn；EOF（Неинтерактивный/конвейер) откат cn。
 func promptRealm(in io.Reader, out io.Writer) string {
-	fmt.Fprintln(out, "选择登录版本: 1) 国内版(cn) 2) 国际版(global) [默认 1/cn]: ")
+	fmt.Fprintln(out, "Выбор версии логина: 1) Версия для материкового Китая(cn) 2) Международная версия(global) [По умолчанию 1/cn]: ")
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && line == "" {
-		// EOF/非交互 → 回落默认 cn
+		// EOF/Неинтерактивный → откат к дефолту cn
 		return realmCN
 	}
 	if realm, ok := resolveRealmInput(line); ok {
 		return realm
 	}
-	fmt.Fprintln(out, "无效选择，默认国内版 cn")
+	fmt.Fprintln(out, "Неверный выбор, по умолчанию CN-версия cn")
 	return realmCN
 }
 
-// validateRealmMatch 校验 state 文件 realm 与命令行 --realm 一致（防混域）：
-// state 无 realm（旧文件）放行；非空且不一致 → error。
+// validateRealmMatch Валидация state Файл realm и командная строка --realm совпадает (защита от смешения доменов):
+// state отсутствует realm（старый файл) пропустить; непусто и не совпадает → error。
 func validateRealmMatch(stateRealm, cliRealm string) error {
 	if stateRealm != "" && stateRealm != cliRealm {
-		return fmt.Errorf("realm mismatch: state file realm=%q, command --realm=%q（url 与 poll 需同一 realm）", stateRealm, cliRealm)
+		return fmt.Errorf("realm mismatch: state file realm=%q, command --realm=%q（url и poll Требуется единый realm）", stateRealm, cliRealm)
 	}
 	return nil
 }
 
-// runURL 执行 url 子命令：向 upstreamBase 的 state 端点 POST 取授权 URL，
-// state 落盘（带 realm），stdout 打印 authURL。out 接 stdout；stateFile 为落盘路径
-// （可注入临时文件便于测试）。空 realm 视为缺省（调用方已归一）。
+// runURL выполнить url Подкоманда: к upstreamBase state Эндпоинт POST Получить авторизацию URL，
+// state сброс на диск (с realm），stdout печать authURL。out Подключение stdout；stateFile — путь сохранения на диск
+// （можно инжектировать временный файл для теста). пусто realm считается дефолтом (вызывающая сторона уже нормализовала).
 func runURL(base, origin, realm, statePath string, client *http.Client, out io.Writer) {
 	headers := commonHeaders(origin)
 	data, _, err := doJSON(client, http.MethodPost, base+"/v2/plugin/auth/state?platform=CLI", headers, bytes.NewReader([]byte("{}")))
@@ -212,7 +212,7 @@ func runURL(base, origin, realm, statePath string, client *http.Client, out io.W
 		fatal("auth state failed: %v", err)
 	}
 	var st struct {
-		State   string `json:"state"`
+		State string `json:"state"`
 		AuthURL string `json:"authUrl"`
 	}
 	if err := json.Unmarshal(data, &st); err != nil || st.State == "" || st.AuthURL == "" {
@@ -225,46 +225,46 @@ func runURL(base, origin, realm, statePath string, client *http.Client, out io.W
 	fmt.Fprintln(out, st.AuthURL)
 }
 
-// runPoll 执行 poll 子命令：读 state 文件（realm 校验），向 upstreamBase 的 token 端点
-// GET 一次，成功再 GET login/account（带 Bearer），stdout 打印完整 token+account JSON。
-// statePath 可注入临时文件便于测试。
+// runPoll выполнить poll подкоманда: чтение state Файл (realm валидация), в upstreamBase token Эндпоинт
+// GET один раз, при успехе снова GET login/account（Лента Bearer），stdout вывести полностью token+account JSON。
+// statePath Можно инжектировать временный файл для тестов.
 func runPoll(base, origin, realm, statePath string, client *http.Client, out io.Writer) {
 	raw, err := os.ReadFile(statePath)
 	if err != nil {
-		fatal("read state: %v (先跑 login url)", err)
+		fatal("read state: %v (Сначала запустить login url)", err)
 	}
 	var ls loginState
 	if err := json.Unmarshal(raw, &ls); err != nil {
 		fatal("parse state: %v", err)
 	}
-	// 防混域：state 落盘 realm 与命令行 --realm 不一致则拒绝（url 与 poll 必须同域）
+	// защита от смешения доменов:state сброс на диск realm и командная строка --realm При несоответствии отклонить (url и poll должен быть в том же домене)
 	if err := validateRealmMatch(ls.Realm, realm); err != nil {
 		fatal("%v", err)
 	}
 	headers := commonHeaders(origin)
-	// handlePollLogin (oauth.go:108-162)：auth/token 是权威登录状态端点，
-	// pending 时业务 code 非 0（"login ing"），完成时 code=0 + token bundle
+	// handlePollLogin (oauth.go:108-162)：auth/token — авторитетный эндпоинт статуса логина,
+	// pending бизнес при code не 0（"login ing"），При завершении code=0 + token bundle
 	tokRaw, status, errTok := doJSON(client, http.MethodGet, base+"/v2/plugin/auth/token?state="+ls.State, headers, nil)
 	if errTok != nil {
 		if status == 0 || status >= 500 {
 			fatal("token endpoint error: %v", errTok)
 		}
-		fatal("登录未完成（waiting for login）。请确认已在浏览器完成登录再按 y")
+		fatal("логин не завершён (waiting for login）。Убедитесь, что вход в браузере выполнен, затем нажмите y")
 	}
 	var tok struct {
-		AccessToken  string `json:"accessToken"`
+		AccessToken string `json:"accessToken"`
 		RefreshToken string `json:"refreshToken"`
-		ExpiresIn    int64  `json:"expiresIn"`
-		Domain       string `json:"domain"`
+		ExpiresIn int64 `json:"expiresIn"`
+		Domain string `json:"domain"`
 	}
 	if err := json.Unmarshal(tokRaw, &tok); err != nil || tok.AccessToken == "" {
-		fatal("登录未完成（waiting for login）。请确认已在浏览器完成登录再按 y")
+		fatal("логин не завершён (waiting for login）。Убедитесь, что вход в браузере выполнен, затем нажмите y")
 	}
-	// login/account 拿 uid/nickname（带 Bearer）
+	// login/account Взять uid/nickname（Лента Bearer）
 	var acct struct {
-		UID          string `json:"uid"`
+		UID string `json:"uid"`
 		EnterpriseID string `json:"enterpriseId"`
-		Nickname     string `json:"nickname"`
+		Nickname string `json:"nickname"`
 	}
 	acctHeaders := func(r *http.Request) {
 		headers(r)
@@ -278,28 +278,28 @@ func runPoll(base, origin, realm, statePath string, client *http.Client, out io.
 	os.Remove(statePath)
 }
 
-// buildLoginOutput 组装 poll 输出的完整 JSON（login.sh 据此落盘 auth 文件）。
-// realm 永不空：显式 --realm 优先（ResolveRealm 处理），否则按上游返回的 domain 推断——
-// 保证登录落盘的 auth 文件恒带 realm 键。
+// buildLoginOutput сборка poll Полный вывод JSON（login.sh На основании этого сохранить на диск auth файл).
+// realm никогда не пусто: явно --realm Приоритет (ResolveRealm обработка), иначе по ответу апстрима domain Вывод —
+// гарантировать сохранение логина на диск auth файл всегда содержит realm ключ.
 func buildLoginOutput(tok struct {
-	AccessToken  string `json:"accessToken"`
+	AccessToken string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
-	ExpiresIn    int64  `json:"expiresIn"`
-	Domain       string `json:"domain"`
+	ExpiresIn int64 `json:"expiresIn"`
+	Domain string `json:"domain"`
 }, realm string, acct struct {
-	UID          string `json:"uid"`
+	UID string `json:"uid"`
 	EnterpriseID string `json:"enterpriseId"`
-	Nickname     string `json:"nickname"`
+	Nickname string `json:"nickname"`
 }) map[string]any {
 	return map[string]any{
-		"access_token":  tok.AccessToken,
+		"access_token": tok.AccessToken,
 		"refresh_token": tok.RefreshToken,
-		"expires_in":    tok.ExpiresIn,
-		"domain":        tok.Domain,
-		"realm":         auth2.ResolveRealm(realm, tok.Domain),
-		"uid":           acct.UID,
+		"expires_in": tok.ExpiresIn,
+		"domain": tok.Domain,
+		"realm": auth2.ResolveRealm(realm, tok.Domain),
+		"uid": acct.UID,
 		"enterprise_id": acct.EnterpriseID,
-		"nickname":      acct.Nickname,
+		"nickname": acct.Nickname,
 	}
 }
 
@@ -311,7 +311,7 @@ func main() {
 	if len(rest) < 1 {
 		fatal("usage: login [--realm=cn|global] <url|poll>")
 	}
-	// 每个流程独立 cookie jar（oauth.go:22-29：多账号登录互不串会话）
+	// каждый процесс независим cookie jar（oauth.go:22-29：многопользовательский вход без смешивания сессий)
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Timeout: 30 * time.Second, Jar: jar}
 
@@ -325,8 +325,8 @@ func main() {
 		runPoll(base, origin, realm, stateFile, client, os.Stdout)
 
 	case "realm":
-		// 交互式选域（login.sh 无 --realm 传参且 stdin 为 tty 时调用）。
-		// 提示打到 stderr，stdout 只输出归一化 realm，供 $( ) 捕获。
+		// Интерактивный выбор домена (login.sh отсутствует --realm Передача параметра и stdin для tty вызов при).
+		// подсказка выводится в stderr，stdout выводить только нормализованное realm，Подача $( ) перехват.
 		realm := promptRealm(os.Stdin, os.Stderr)
 		fmt.Println(realm)
 

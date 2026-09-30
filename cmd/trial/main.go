@@ -1,22 +1,22 @@
-// trial 一次性批量领取 global trial 加油包：遍历 auths 下全部账号，
-// 仅对 global 账号执行 /billing/ide/trial（CN 无此端点，明确提示不适用）。
+// trial Единоразовое массовое получение global trial пакет-дозаправка: перебор auths все аккаунты в ,
+// только для global выполнение аккаунтом /billing/ide/trial（CN нет такого эндпоинта, явно сообщить о неприменимости).
 //
-// 用法：
+// Использование:
 //
-//	# 本地：在项目根目录（需 config.json + auths/ + data/）直接 run
+//	# Локально: в корне проекта (требуется config.json + auths/ + data/）прямо run
 //	go run ./cmd/trial
 //
-//	# 容器内：先 cp 进去再 exec
+//	# Внутри контейнера: сначала cp войти затем exec
 //	docker cp trial workbuddy2api:/tmp/trial
 //	docker exec -w /app workbuddy2api /tmp/trial
 //
-// 结果逐账号输出到 stdout：
+// Результаты выводятся поаккаунтно в stdout：
 //
 //	uid | nick | status | detail
 //	----+------+--------+-------
 //	... | GLOBAL | OK | trial granted
-//	... | GLOBAL | ALREADY | 已领取过（幂等，不算失败）
-//	... | CN     | N/A   | not applicable
+//	... | GLOBAL | ALREADY | уже получено (идемпотентно, не считается ошибкой)
+//	... | CN | N/A | not applicable
 package main
 
 import (
@@ -29,8 +29,8 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
-// classifyTrial 归一化 ClaimTrial 结果（纯函数，供 main 循环与测试直接断言）：
-// err → FAIL；claimed → OK；否则（幂等码已领）→ ALREADY。
+// classifyTrial Нормализация ClaimTrial результат (чистая функция, для main цикл и тест напрямую assert):
+// err → FAIL；claimed → OK；иначе (идемпотентный код уже получен)→ ALREADY。
 func classifyTrial(claimed bool, err error) (trialStatus, string) {
 	switch {
 	case err != nil:
@@ -42,19 +42,19 @@ func classifyTrial(claimed bool, err error) (trialStatus, string) {
 	}
 }
 
-// trialStatus 单账号 trial 领取结果状态。
+// trialStatus Один аккаунт trial Статус результата получения.
 type trialStatus string
 
 const (
-	trialOK      trialStatus = "OK"
+	trialOK trialStatus = "OK"
 	trialAlready trialStatus = "ALREADY"
-	trialNotApp  trialStatus = "N/A" // CN 账号不适用
-	trialFailed  trialStatus = "FAIL"
+	trialNotApp trialStatus = "N/A" // CN аккаунт неприменим
+	trialFailed trialStatus = "FAIL"
 )
 
 type trialRow struct {
-	uid    string
-	nick   string
+	uid string
+	nick string
 	status trialStatus
 	detail string
 }
@@ -72,8 +72,8 @@ func main() {
 	sort.Strings(files)
 
 	up := upstream.New()
-	// trial 是 global 专属端点：必须开启 global realm 路由，否则 upstream.New() 的
-	// GlobalEnabled 零值 false 会把请求路由到 CN base（codebuddy.cn）而必然失败。
+	// trial Да global Выделенный эндпоинт: должен быть включен global realm роутинг, иначе upstream.New() 
+	// GlobalEnabled нулевое значение false будет роутить запрос на CN base（codebuddy.cn）и неизбежно завершится ошибкой.
 	up.GlobalEnabled = true
 	var rows []trialRow
 	for _, f := range files {
@@ -93,7 +93,7 @@ func main() {
 		a.FilePath = f
 		r.uid, r.nick = a.UID, a.Nickname
 
-		// 仅 global 账号适用：CN 明确提示不适用，不发任何请求。
+		// Только global Применимо к аккаунту:CN Явно сообщить о неприменимости, запросы не отправлять.
 		if !a.IsGlobal() {
 			r.status, r.detail = trialNotApp, "CN account not applicable"
 			rows = append(rows, r)
@@ -105,7 +105,7 @@ func main() {
 	}
 
 	var okN, alreadyN, notAppN, failN int
-	fmt.Printf("uid                                  | nick        | status  | detail\n")
+	fmt.Printf("uid | nick | status | detail\n")
 	fmt.Printf("-------------------------------------+-------------+---------+------------------------------\n")
 	for _, r := range rows {
 		fmt.Printf("%-36s | %-11s | %-7s | %s\n",

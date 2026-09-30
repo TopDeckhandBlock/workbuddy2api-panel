@@ -1,5 +1,5 @@
-// signin 一次性批量签到工具：遍历 ./auths/workbuddy-*.json 全部账号，
-// 自动 RefreshToken（过期时），逐个调 daily-checkin，顺手查余额。
+// signin одноразовый инструмент пакетного check-in: обход ./auths/workbuddy-*.json Все аккаунты,
+// Авто RefreshToken（при истечении), вызывать по одному daily-checkin，попутно проверить баланс.
 package main
 
 import (
@@ -15,12 +15,12 @@ import (
 )
 
 type row struct {
-	file     string
-	uid      string
-	nick     string
-	status   string // OK | ALREADY | FAIL | AUTH_INVALID | LOAD_ERR
-	detail   string
-	remain   int64
+	file string
+	uid string
+	nick string
+	status string // OK | ALREADY | FAIL | AUTH_INVALID | LOAD_ERR
+	detail string
+	remain int64
 	hasQuota bool
 }
 
@@ -58,7 +58,7 @@ func main() {
 		a.FilePath = f
 		r.uid, r.nick = a.UID, a.Nickname
 
-		// refresh 过期 token
+		// refresh Истёк token
 		if a.NeedsRefresh(2 * 3600) {
 			if err := up.RefreshToken(a); err != nil {
 				if ue, ok := err.(*upstream.Error); ok && ue.Kind == upstream.ErrSessionDead {
@@ -71,7 +71,7 @@ func main() {
 				failN++
 				continue
 			}
-			// refresh 后写回文件（权限问题已修复）；落盘失败必须暴露，否则重启回旧 token
+			// refresh затем запись обратно в файл (проблема прав исправлена); сбой сохранения должен быть явным, иначе после рестарта — откат к старому token
 			if err := a.SaveAtomic(); err != nil {
 				log.Printf("signin %s save: %v", a.UID, err)
 			}
@@ -83,7 +83,7 @@ func main() {
 			r.status = "OK"
 			okN++
 		default:
-			// DailyCheckin 已签到返回 code!=0 错误
+			// DailyCheckin Возврат при уже выполненном чекине code!=0 Ошибка
 			if isAlready(err.Error()) {
 				r.status = "ALREADY"
 				r.detail = short(err.Error())
@@ -94,15 +94,15 @@ func main() {
 				failN++
 			}
 		}
-		// 顺手查余额
+		// Попутно проверить баланс
 		if remain, _, qerr := up.UserResource(a); qerr == nil {
 			r.remain, r.hasQuota = remain, true
 		}
 		rows = append(rows, r)
 	}
 
-	// 报告
-	fmt.Printf("uid                                  | nick        | status       | remain | detail\n")
+	// отчет
+	fmt.Printf("uid | nick | status | remain | detail\n")
 	fmt.Printf("-------------------------------------+-------------+--------------+--------+------------------------------\n")
 	for _, r := range rows {
 		remain := "-"
@@ -115,10 +115,10 @@ func main() {
 	fmt.Printf("\ntotal=%d ok=%d already=%d fail=%d\n", len(rows), okN, alreadyN, failN)
 }
 
-// 已签判定：code 非 0 且含 "已签到"/"already"/"checkin" 等字样
+// решение о наличии подписи:code не 0 И содержит "Уже отмечено«/«already»/«checkin" и т.п. текст
 func isAlready(msg string) bool {
 	s := strings.ToLower(msg)
-	return strings.Contains(s, "已签到") ||
+	return strings.Contains(s, "Уже отмечено") ||
 		strings.Contains(s, "already") ||
 		strings.Contains(s, "checkin") ||
 		strings.Contains(s, "code=400")

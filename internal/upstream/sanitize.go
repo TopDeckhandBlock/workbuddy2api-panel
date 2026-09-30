@@ -1,8 +1,8 @@
-// sanitize.go 出站请求体脱敏：剥离上游内容审核黑名单指纹。
+// sanitize.go Десенсибилизация тела исходящего запроса: удаление отпечатка блэклиста модерации апстрима.
 //
-// 背景：客户端（Claude Code 类 CLI）在 system prompt 注入若干固定模板句，
-// 上游内容审核按逐字精确匹配拦截（非语义审核），一字改动即可绕过。
-// 策略：键值/header 型指纹整段剥离；承载语义的模板句最小改写（换一词），语义不变。
+// Контекст: клиент (Claude Code Класс CLI）В system prompt Инжектировать несколько фиксированных шаблонных фраз,
+// модерация контента апстрима — точное дословное совпадение (не семантическая), обходится изменением одного символа.
+// Стратегия: ключ-значение/header отпечаток типа удаляется целиком; несущие семантику шаблонные фразы — минимальная правка (замена одного слова), смысл неизменен.
 package upstream
 
 import (
@@ -10,43 +10,43 @@ import (
 	"strings"
 )
 
-// sanitizeFeatures 特征预检：任一命中才进入净化（strings.Contains 快速路径，
-// 普通请求全不中 → 原样返回，零分配）。
+// sanitizeFeatures предпроверка признаков: любой хит — вход в очистку (strings.Contains быстрый путь,
+// Обычные запросы — все мимо → вернуть как есть, нулевое распределение).
 var sanitizeFeatures = []string{
-	"x-anthropic-billing-header", // header 键值段键名
-	"cc_entrypoint=",             // 尾随裸键值（截断前缀即可命中）
-	"You are Claude Code",        // 身份句（截断前缀即可命中）
-	"Main branch (",              // 注入指令句（截断前缀即可命中）
-	"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
-	"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
-	"11128",                                           // 上游反探测：裸数字错误码
+	"x-anthropic-billing-header", // header Имя ключа сегмента key-value
+	"cc_entrypoint=", // Хвостовое голое значение ключа (достаточно обрезать префикс для попадания)
+	"You are Claude Code", // идентифицирующая фраза (достаточно префикса для срабатывания)
+	"Main branch (", // инъекция директивы (срабатывает по усечённому префиксу)
+	"You are a coding agent running in the Codex CLI", // Codex instructions Первый сегмент (достаточно усечённого префикса для хита)
+	"github.com/anthropics/", // Во фразе обратной связи Anthropic Ссылка на репозиторий
+	"11128", // Анти-детект апстрима: голый числовой код ошибки
 }
 
-// sanitizeHdrRe 剥离层：header 键名即触发（与值无关），整段删除。
+// sanitizeHdrRe Слой stripping:header Триггер — имя ключа (значение неважно), удалить весь блок.
 var sanitizeHdrRe = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^;\n]*;?\s*`)
 
-// sanitizeBareHdrRe 兜底层：裸键名（无冒号无值）同样是指纹——2026-09-13 实验 F4
-// 证实 assistant 消息里反引号引用裸键名即触发 11128，而剥离层要求冒号、对裸串无效。
-// 键值形态被整段删除后，残留的裸键名做最小缩写（header→hdr）：破坏逐字匹配、
-// 语义不变、保留可读性。大小写不敏感，覆盖 X-Anthropic-... 变体。
+// sanitizeBareHdrRe фолбэк нижнего уровня: голое имя ключа (без двоеточия и значения) — тоже отпечаток —2026-09-13 Эксперимент F4
+// подтверждено assistant упоминание голого имени ключа в обратных кавычках в сообщении — триггер 11128，а слой stripping требует двоеточие, на голую строку не действует.
+// После полного удаления формы ключ-значение оставшееся голое имя ключа минимально сокращается (header→hdr）：Нарушает дословное совпадение,
+// Семантика не меняется, читаемость сохраняется. Без учета регистра, перезаписывает X-Anthropic-... Вариант.
 //
-// 注意该正则不要求冒号，是 sanitizeHdrRe 的超集——hasFingerprint 与 sanitizeText
-// 中两者并用：先删键值形态（sanitizeHdrRe），再缩写残留裸键名（本正则），
-// 替换语义不同（整段删除 vs 最小缩写），不可合并为一个正则。
+// внимание: данный regex не требует двоеточия, это sanitizeHdrRe супермножество —hasFingerprint и sanitizeText
+// там используются оба: сначала удалить key-value форму (sanitizeHdrRe），затем сократить оставшиеся голые имена ключей (данное regex),
+// семантика замены отличается (удаление целого блока vs минимальная аббревиатура), нельзя объединять в один regex.
 var sanitizeBareHdrRe = regexp.MustCompile(`(?i)x-anthropic-billing-header`)
 
-// sanitizeKvRe 剥离层：尾随裸键值（cc_xxx=...;）循环清理。
+// sanitizeKvRe Слой stripping: хвостовой голый key-value (cc_xxx=...;）Циклическая очистка.
 var sanitizeKvRe = regexp.MustCompile(`(?i)\bcc_[a-z0-9_]+=[^;\n]*;?\s*`)
 
-// sanitizeRewrites 改写层：全模板句逐字替换（每句只改一个词，语义不变）。
+// sanitizeRewrites Слой рерайта: дословная замена всех шаблонных фраз (одно слово на предложение, смысл не меняется).
 //
-// 身份句的匹配串**不带结尾标点**（只到 "…for Claude" 为止）：
-// CLI 版这句以句号收尾（"…for Claude."），桌面版（claude-desktop-3p / Agent SDK）
-// 以逗号接后继内容（"…for Claude, running within the Claude Agent SDK."）。
-// 带句号的整句只匹配前者，桌面版会漏网、指纹原样发上游 → 400 code=11128。
-// 去掉结尾标点后两种形态一并覆盖（替换串同样不带标点，让原有标点原样保留）。
-// 注意仍要求 "You are Claude Code, " 前缀，不做更宽的子串替换，
-// 以免误伤 TestExactMatchOnlyVariantNotTouched 所保护的零散文本。
+// строка совпадения фразы идентификации**без завершающего знака препинания**（только до "…for Claude" до):
+// CLI Версия: фраза заканчивается точкой ("…for Claude."），Десктоп-версия (claude-desktop-3p / Agent SDK）
+// через запятую присоединить последующий контент ("…for Claude, running within the Claude Agent SDK."）。
+// целое предложение с точкой матчит только первое, десктоп-версия проскочит, fingerprint уйдет в upstream как есть → 400 code=11128。
+// После удаления конечной пунктуации покрыть обе формы (строка замены тоже без пунктуации, исходная пунктуация сохраняется).
+// Обратите внимание, всё ещё требуется "You are Claude Code, " префикс, без более широкой замены подстроки,
+// Во избежание ложных срабатываний TestExactMatchOnlyVariantNotTouched Защищаемый разрозненный текст.
 var sanitizeRewrites = [][2]string{
 	{
 		"You are Claude Code, Anthropic's official CLI for Claude",
@@ -61,24 +61,24 @@ var sanitizeRewrites = [][2]string{
 		"You are a coding agent running in the Codex CLI tool, a terminal-based coding assistant.",
 	},
 	{
-		// 反馈句：整句带 Anthropic 仓库链接，上游按整句拦截（只留链接或只留半边均不拦，
-		// 实测需整句同时出现）。give→provide 一词之差即可绕过，语义不变。
+		// Фраза обратной связи: целиком с Anthropic Ссылка на репозиторий, апстрим блокирует целым предложением (только ссылка или только половина не блокируется,
+		// фактически требуется одновременное появление целой фразы).give→provide достаточно разницы в одно слово для обхода, семантика неизменна.
 		"To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
 		"To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
 	},
 	{
-		// 上游反探测：只要请求体里出现裸数字 11128 就整单拦截（与该数字的上下文无关——
-		// "code=11128" / 裸 "11128" / "错误码 11128" / "Code=11128" 全部命中；
-		// 相邻的 11148 / 11101 / 11115 / 99999 均放行）。11128 正是本类拦截自身的错误码，
-		// 上游据此识别"在讨论/回显其内部错误码"的请求。
-		// 代价：用户对话中任何 11128 都会被改写——但这串数字出现在请求里本身就是拦截条件，
-		// 不改写必然失败。插入连字符保留可读性与指代（零宽空格无效，实测上游会归一化）。
+		// антидетект upstream: если в теле запроса есть голое число 11128 то блокировать весь заказ (вне зависимости от контекста этого числа —
+		// "code=11128« / Голый «11128» / «код ошибки 11128« / »Code=11128" Все попадания;
+		// Соседний 11148 / 11101 / 11115 / 99999 все пропускаются).11128 именно код ошибки перехвата этого класса,
+		// Апстрим идентифицирует по этому"В обсуждении/отобразить его внутренний код ошибки"запроса.
+		// цена: любой в диалоге пользователя 11128 будут перезаписаны — но появление этой числовой последовательности в запросе само по себе условие блокировки,
+		// Без перезаписи неизбежно провал. Вставка дефиса сохраняет читаемость и ссылку (zero-width space неэффективен, на практике апстрим нормализует).
 		"11128",
 		"11-128",
 	},
 }
 
-// sanitizeText 单段文本净化：预检不中 → 返回原串（零分配）。
+// sanitizeText Очистка одиночного фрагмента: предпроверка не сработала → вернуть исходную строку (zero-alloc).
 func sanitizeText(text string) string {
 	if !hasFingerprint(text) {
 		return text
@@ -91,21 +91,21 @@ func sanitizeText(text string) string {
 	}
 	if strings.Contains(text, "cc_") {
 		prev := ""
-		for prev != text { // 清尾随裸 kv（cc_version=...; cc_entrypoint=...;）
+		for prev != text { // Очистить хвостовой bare kv（cc_version=...; cc_entrypoint=...;）
 			prev = text
 			text = sanitizeKvRe.ReplaceAllString(text, "")
 		}
 	}
-	// 兜底：键值形态已在上面整段删除，这里只剩裸键名（引用/示例文本形态）。
+	// фолбэк: формат key-value уже целиком удалён выше, здесь остался только голый ключ (ссылка/форме примерного текста).
 	text = sanitizeBareHdrRe.ReplaceAllString(text, "x-anthropic-billing-hdr")
 	return strings.TrimSpace(text)
 }
 
-// hasFingerprint 特征预检：先走 strings.Contains 快速路径（零分配）；
-// header 键名有大小写变体（X-Anthropic-...）且可能以裸键名形态出现（无冒号），
-// Contains 大小写敏感、sanitizeHdrRe 要求冒号——两者都会漏掉「混合大小写 + 裸键名」，
-// 必须再用不要求冒号的 (?i) 正则兜底（sanitizeBareHdrRe），否则整条净化被跳过。
-// sanitizeBareHdrRe 不要求冒号，是 sanitizeHdrRe 的超集，故无需再单独匹配后者。
+// hasFingerprint предпроверка признаков: сначала strings.Contains быстрый путь (нулевое распределение);
+// header Варианты регистра имени ключа (X-Anthropic-...）и может встречаться как голое имя ключа (без двоеточия),
+// Contains чувствительно к регистру,sanitizeHdrRe требуется двоеточие — оба пропустят "смешанный регистр + голое имя ключа»,
+// Необходимо повторно использовать не требующий двоеточия (?i) Фолбэк через regex (sanitizeBareHdrRe），Иначе вся очистка пропускается.
+// sanitizeBareHdrRe Двоеточие не требуется, это sanitizeHdrRe является надмножеством, поэтому отдельное сопоставление последнего не требуется.
 func hasFingerprint(text string) bool {
 	for _, f := range sanitizeFeatures {
 		if strings.Contains(text, f) {
@@ -115,8 +115,8 @@ func hasFingerprint(text string) bool {
 	return sanitizeBareHdrRe.MatchString(text)
 }
 
-// sanitizeContent 兼容字符串与多模态数组；只动 text part，image 等 part 不动。
-// 返回净化后的值及是否发生变化。
+// sanitizeContent Совместимо со строкой и мультимодальным массивом; затрагивает только text part，image и т.д. part Не изменять.
+// возвращает очищенное значение и флаг изменения.
 func sanitizeContent(v any) (any, bool) {
 	switch c := v.(type) {
 	case string:
@@ -143,12 +143,12 @@ func sanitizeContent(v any) (any, bool) {
 	return v, false
 }
 
-// sanitizeToolCalls 净化 assistant.tool_calls[].function.arguments。
+// sanitizeToolCalls Очистка assistant.tool_calls[].function.arguments。
 //
-// arguments 是**字符串化的 JSON**（不是对象），因此按文本走 sanitizeText 即可。
-// 这块长期是盲区：工具调用消息的 content 通常是 null，而旧版 sanitizeMessages
-// 在 content 缺失时直接 continue，整条消息连 tool_calls 一起被跳过——
-// 于是历史里任何写进工具参数的被拦字符串（文件名、命令、写入内容）都会原样漏出。
+// arguments Да**Строкифицированный JSON**（не объект), поэтому обрабатывать как текст sanitizeText Достаточно.
+// этот участок долго был слепой зоной: сообщения вызова инструментов content обычно null，а старая версия sanitizeMessages
+// В content При отсутствии напрямую continue，Все сообщение целиком tool_calls вместе пропускается —
+// тогда любая заблокированная строка, записанная в параметры инструмента в истории (имя файла, команда, содержимое записи), утечет как есть.
 func sanitizeToolCalls(v any) bool {
 	callList, ok := v.([]any)
 	if !ok {
@@ -176,7 +176,7 @@ func sanitizeToolCalls(v any) bool {
 	return changed
 }
 
-// sanitizeMessages 净化 messages 中的 content 与 tool_calls；任一命中返回 true。
+// sanitizeMessages Очистка messages в content и tool_calls；При любом совпадении вернуть true。
 func sanitizeMessages(messages []any) bool {
 	changed := false
 	for _, msg := range messages {
@@ -184,16 +184,16 @@ func sanitizeMessages(messages []any) bool {
 		if !ok {
 			continue
 		}
-		// content 与 tool_calls 各自独立判断：content 可以为 null（工具调用轮），
-		// 早期版本在此 continue，导致这类消息的 tool_calls 完全不被净化。
+		// content и tool_calls каждый проверяется независимо:content может быть null（виток вызова инструмента),
+		// В ранних версиях здесь continue，причина сообщений такого типа tool_calls совсем не очищается.
 		if c, ok := m["content"]; ok {
 			if nc, ch := sanitizeContent(c); ch {
 				m["content"] = nc
 				changed = true
 			}
 		}
-		// reasoning_content（思维链回填字段，见 thinking.go/sse.go）实测同样
-		// 携带指纹，与 content 同等净化。string 形态直接走 sanitizeText。
+		// reasoning_content（Поле обратной заливки цепочки рассуждений, см. thinking.go/sse.go）На практике также
+		// Несёт отпечаток, и content Аналогичная очистка.string форма идет напрямую sanitizeText。
 		if rc, ok := m["reasoning_content"].(string); ok {
 			if s := sanitizeText(rc); s != rc {
 				m["reasoning_content"] = s
